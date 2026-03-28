@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>New Tab</title>
+  <style>
+    *, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
+
+    body {
+      background: #202124;
+      color: #e8eaed;
+      font-family: -apple-system, 'Segoe UI', Roboto, Arial, sans-serif;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ── Greeting ──────────────────────────────────────────────── */
+    .greeting-bar {
+      padding: 22px 36px 0;
+      font-size: 20px;
+      font-weight: 400;
+      color: #bdc1c6;
+      flex-shrink: 0;
+    }
+    .greeting-bar span { color: #8ab4f8; }
+
+    /* ── Main grid ─────────────────────────────────────────────── */
+    .main-grid {
+      flex: 1;
+      display: flex;
+      padding: 18px 36px 14px;
+      min-height: 0;
+    }
+
+    .card {
+      background: #2d2e30;
+      border-radius: 14px;
+      border: 1px solid rgba(255,255,255,0.07);
+      padding: 28px 32px 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      transition: border-color 0.2s;
+      overflow: hidden;
+      width: 100%;
+      max-width: 600px;
+      margin: 0 auto;
+    }
+    .card-label {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: #5f6368;
+    }
+
+    /* ── Search card ────────────────────────────────────────────── */
+    .engine-badge {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .engine-icon {
+      width: 34px; height: 34px;
+      border-radius: 9px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px;
+      background: rgba(255,255,255,0.06);
+      flex-shrink: 0;
+    }
+    .engine-name { font-size: 17px; font-weight: 500; }
+    .engine-desc { font-size: 11px; color: #9aa0a6; }
+
+    .search-box {
+      display: flex;
+      align-items: center;
+      background: #3c4043;
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 26px;
+      overflow: hidden;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    .search-box:focus-within {
+      border-color: #8ab4f8;
+      box-shadow: 0 0 0 3px rgba(138,180,248,0.14);
+    }
+    .search-icon-wrap {
+      padding: 0 14px;
+      color: #9aa0a6;
+      display: flex; align-items: center;
+      flex-shrink: 0;
+    }
+    .search-box input {
+      flex: 1;
+      padding: 12px 0;
+      background: transparent;
+      border: none;
+      color: #e8eaed;
+      font-size: 14px;
+      outline: none;
+      min-width: 0;
+    }
+    .search-box input::placeholder { color: #6e7681; }
+    .search-go {
+      padding: 0 16px;
+      background: transparent;
+      border: none;
+      color: #8ab4f8;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .search-go:hover { color: #aecbfa; }
+
+    /* ── Bookmarks section ──────────────────────────────────────── */
+    .bookmarks-section {
+      padding: 0 36px 22px;
+      flex-shrink: 0;
+    }
+    .bookmarks-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    .bookmarks-label {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: #5f6368;
+      flex: 1;
+    }
+    .bm-add-btn {
+      padding: 4px 10px;
+      background: rgba(138,180,248,0.1);
+      border: 1px solid rgba(138,180,248,0.2);
+      border-radius: 12px;
+      color: #8ab4f8;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .bm-add-btn:hover { background: rgba(138,180,248,0.2); }
+
+    .bm-add-form {
+      display: none;
+      gap: 7px;
+      margin-bottom: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .bm-add-form input {
+      flex: 1;
+      min-width: 140px;
+      padding: 7px 11px;
+      background: #3c4043;
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 8px;
+      color: #e8eaed;
+      font-size: 13px;
+      outline: none;
+    }
+    .bm-add-form input:focus { border-color: #8ab4f8; }
+    .bm-form-btn {
+      padding: 7px 14px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+    }
+    .bm-form-save   { background: #1a73e8; color: #fff; }
+    .bm-form-save:hover { background: #1557b0; }
+    .bm-form-cancel { background: rgba(255,255,255,0.08); color: #9aa0a6; }
+    .bm-form-cancel:hover { background: rgba(255,255,255,0.14); }
+
+    .bookmarks-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      min-height: 30px;
+    }
+    .bm-chip {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px 6px 10px;
+      background: #2d2e30;
+      border: 1px solid rgba(255,255,255,0.07);
+      border-radius: 18px;
+      color: #9aa0a6;
+      font-size: 12px;
+      cursor: default;
+      transition: all 0.12s;
+    }
+    .bm-chip:hover { border-color: rgba(138,180,248,0.2); background: rgba(138,180,248,0.05); }
+    .bm-chip img { width: 14px; height: 14px; border-radius: 2px; }
+    .bm-text { cursor: pointer; color: #bdc1c6; }
+    .bm-text:hover { color: #8ab4f8; }
+    .bm-del {
+      width: 16px; height: 16px;
+      border-radius: 50%;
+      background: transparent;
+      border: none;
+      color: #5f6368;
+      font-size: 13px;
+      line-height: 1;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: color 0.12s, background 0.12s;
+      padding: 0; margin-left: 2px;
+    }
+    .bm-del:hover { color: #e8eaed; background: rgba(255,255,255,0.12); }
+
+    .bm-empty {
+      font-size: 12px;
+      color: #5f6368;
+      font-style: italic;
+      padding: 4px 0;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="greeting-bar" id="greeting">Good morning — <span>New Tab</span></div>
+
+  <div class="main-grid">
+
+    <!-- Search engine (full width, centered) -->
+    <div class="card">
+      <div class="card-label">Search</div>
+      <div class="engine-badge">
+        <div class="engine-icon" id="engine-icon">🔍</div>
+        <div>
+          <div class="engine-name" id="engine-name">Google</div>
+          <div class="engine-desc" id="engine-desc">google.com</div>
+        </div>
+      </div>
+      <div class="search-box">
+        <div class="search-icon-wrap">
+          <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
+            <circle cx="6.5" cy="6.5" r="4" stroke="#9aa0a6" stroke-width="1.4"/>
+            <path d="M9.5 9.5L13 13" stroke="#9aa0a6" stroke-width="1.4" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <input type="text" id="search-input" placeholder="Search or type a URL" autofocus/>
+        <button class="search-go" id="search-btn">Search →</button>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- BOTTOM: User bookmarks -->
+  <div class="bookmarks-section">
+    <div class="bookmarks-header">
+      <div class="bookmarks-label">Bookmarks</div>
+      <button class="bm-add-btn" id="bm-add-btn">+ Add</button>
+    </div>
+    <div class="bm-add-form" id="bm-add-form">
+      <input type="text" id="bm-label" placeholder="Name  e.g. GitHub"/>
+      <input type="text" id="bm-url"   placeholder="URL   e.g. https://github.com"/>
+      <button class="bm-form-btn bm-form-save"   id="bm-save">Add</button>
+      <button class="bm-form-btn bm-form-cancel" id="bm-cancel">Cancel</button>
+    </div>
+    <div class="bookmarks-row" id="bookmarks-row"></div>
+    <div class="bm-empty" id="bm-empty">No bookmarks yet — click <strong>+ Add</strong> to save your favourite sites.</div>
+  </div>
+
+  <script>
+    const ENGINE_META = {
+      google:     { name: 'Google',     desc: 'google.com',     icon: 'G', url: 'https://www.google.com/search?q=' },
+      bing:       { name: 'Bing',       desc: 'bing.com',       icon: 'B', url: 'https://www.bing.com/search?q=' },
+      duckduckgo: { name: 'DuckDuckGo', desc: 'duckduckgo.com', icon: 'D', url: 'https://duckduckgo.com/?q=' },
+      yahoo:      { name: 'Yahoo',      desc: 'yahoo.com',      icon: 'Y', url: 'https://search.yahoo.com/search?p=' },
+      ecosia:     { name: 'Ecosia',     desc: 'ecosia.org',     icon: 'E', url: 'https://www.ecosia.org/search?q=' },
+    };
+
+    // ── Engine from localStorage (with hash fallback) ────────────────────────
+    const storedEngine = localStorage.getItem('search_engine');
+    const engineKey  = storedEngine || window.location.hash.slice(1) || 'google';
+    const engineMeta = ENGINE_META[engineKey] || ENGINE_META.google;
+    window.__engineUrl = engineMeta.url;
+
+    document.getElementById('engine-icon').textContent = engineMeta.icon;
+    document.getElementById('engine-name').textContent = engineMeta.name;
+    document.getElementById('engine-desc').textContent = engineMeta.desc;
+    document.getElementById('search-input').placeholder = `Search with ${engineMeta.name}`;
+
+    // ── Greeting ──────────────────────────────────────────────────────────────
+    const h = new Date().getHours();
+    document.getElementById('greeting').innerHTML =
+      `${h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening'} — <span>New Tab</span>`;
+
+    // ── Search ────────────────────────────────────────────────────────────────
+    function doSearch() {
+      const v = document.getElementById('search-input').value.trim();
+      if (!v) return;
+      const url = /^https?:\/\//i.test(v) ? v
+                : !v.includes(' ') && v.includes('.') ? 'https://' + v
+                : window.__engineUrl + encodeURIComponent(v);
+      window.location.href = url;
+    }
+    document.getElementById('search-btn').addEventListener('click', doSearch);
+    document.getElementById('search-input').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
+
+    // ── Bookmarks ─────────────────────────────────────────────────────────────
+    let currentBookmarks = [];
+
+    window.setBookmarks = function(bms) {
+      currentBookmarks = Array.isArray(bms) ? bms : [];
+      renderBookmarks();
+    };
+
+    function renderBookmarks() {
+      const row   = document.getElementById('bookmarks-row');
+      const empty = document.getElementById('bm-empty');
+      row.innerHTML = '';
+      if (currentBookmarks.length === 0) { empty.style.display = 'block'; return; }
+      empty.style.display = 'none';
+
+      currentBookmarks.forEach((bm, i) => {
+        const url   = bm.url   || bm;
+        const label = bm.label || url;
+        const chip  = document.createElement('div');
+        chip.className = 'bm-chip';
+
+        let faviconHtml = '';
+        try {
+          faviconHtml = `<img src="https://www.google.com/s2/favicons?domain=${new URL(url).hostname}&sz=16" onerror="this.style.display='none'">`;
+        } catch {}
+
+        chip.innerHTML = `${faviconHtml}<span class="bm-text">${label}</span><button class="bm-del" title="Remove">×</button>`;
+        chip.querySelector('.bm-text').addEventListener('click', () => { window.location.href = url; });
+        chip.querySelector('.bm-del').addEventListener('click', e => {
+          e.stopPropagation();
+          console.log('__bookmarks__:REMOVE:' + i);
+        });
+        row.appendChild(chip);
+      });
+    }
+
+    // Add bookmark form
+    document.getElementById('bm-add-btn').addEventListener('click', () => {
+      const f = document.getElementById('bm-add-form');
+      f.style.display = f.style.display === 'flex' ? 'none' : 'flex';
+      if (f.style.display === 'flex') document.getElementById('bm-label').focus();
+    });
+    document.getElementById('bm-cancel').addEventListener('click', () => {
+      document.getElementById('bm-add-form').style.display = 'none';
+      document.getElementById('bm-label').value = '';
+      document.getElementById('bm-url').value = '';
+    });
+    document.getElementById('bm-save').addEventListener('click', () => {
+      let url   = document.getElementById('bm-url').value.trim();
+      const lbl = document.getElementById('bm-label').value.trim();
+      if (!url) { document.getElementById('bm-url').focus(); return; }
+      if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+      const label = lbl || (() => { try { return new URL(url).hostname; } catch { return url; } })();
+      console.log('__bookmarks__:ADD:' + JSON.stringify({ url, label }));
+      document.getElementById('bm-url').value   = '';
+      document.getElementById('bm-label').value = '';
+      document.getElementById('bm-add-form').style.display = 'none';
+    });
+    // Enter on Name → jump to URL; Enter on URL → save
+    document.getElementById('bm-label').addEventListener('keydown', e => {
+      if (e.key === 'Enter') document.getElementById('bm-url').focus();
+      if (e.key === 'Escape') document.getElementById('bm-cancel').click();
+    });
+    document.getElementById('bm-url').addEventListener('keydown', e => {
+      if (e.key === 'Enter') document.getElementById('bm-save').click();
+      if (e.key === 'Escape') document.getElementById('bm-cancel').click();
+    });
+
+    // Signal renderer that the page is ready for bookmark injection
+    console.log('__newtab__:ready');
+  </script>
+</body>
+</html>

@@ -1,0 +1,20 @@
+# Build outputs
+publish/
+YCB/bin/
+YCB/obj/
+*.user
+
+# Installer artifacts
+YCB-Setup.exe
+MicrosoftEdgeWebview2Setup.exe
+
+# VS/Rider
+.vs/
+*.suo
+*.sln.docstates
+
+# OS
+Thumbs.db
+Desktop.ini
+
+windowsdesktop-runtime-*.exe

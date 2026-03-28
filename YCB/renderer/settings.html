@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' data: blob:">
+  <title>Settings - YCB</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #1e1f22; --sidebar: #27282c; --card: #2d2e32;
+      --card2: #33343a; --text: #e8eaed; --text2: #9aa0a6;
+      --accent: #8ab4f8; --green: #81c995; --border: rgba(255,255,255,0.08);
+      --red: #f28b82;
+    }
+    html, body { height: 100%; background: var(--bg); color: var(--text); font-family: -apple-system,'Segoe UI',Roboto,Arial,sans-serif; font-size: 13px; }
+    body { display: flex; overflow: hidden; }
+
+    /* Sidebar */
+    .sidebar {
+      width: 240px; background: var(--sidebar); display: flex; flex-direction: column;
+      height: 100vh; flex-shrink: 0; border-right: 1px solid var(--border);
+    }
+    .sidebar-header {
+      padding: 20px 16px 16px; border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; gap: 10px;
+    }
+    .sidebar-logo {
+      width: 36px; height: 36px; background: linear-gradient(135deg,#1a73e8,#5b9cf6);
+      border-radius: 10px; display: flex; align-items: center; justify-content: center;
+      font-size: 18px; flex-shrink: 0;
+    }
+    .sidebar-title { font-size: 15px; font-weight: 600; color: var(--text); }
+    .sidebar-sub { font-size: 11px; color: var(--text2); margin-top: 1px; }
+    .sidebar-nav { padding: 8px 8px; flex: 1; overflow-y: auto; }
+    .nav-item {
+      display: flex; align-items: center; gap: 10px;
+      padding: 9px 12px; border-radius: 8px; cursor: pointer;
+      color: var(--text2); font-size: 13px; margin-bottom: 2px;
+      transition: background 0.12s, color 0.12s; text-decoration: none;
+    }
+    .nav-item:hover { background: rgba(255,255,255,0.06); color: var(--text); }
+    .nav-item.active { background: rgba(138,180,248,0.12); color: var(--accent); }
+    .nav-icon { width: 16px; text-align: center; flex-shrink: 0; font-size: 14px; }
+
+    /* Main */
+    .main { flex: 1; overflow-y: auto; height: 100vh; padding: 32px 36px; background: var(--bg); }
+    .main::-webkit-scrollbar { width: 6px; }
+    .main::-webkit-scrollbar-track { background: transparent; }
+    .main::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 4px; }
+
+    .page-title { font-size: 22px; font-weight: 400; color: var(--text); margin-bottom: 6px; }
+    .page-sub { font-size: 12px; color: var(--text2); margin-bottom: 28px; }
+
+    .section { margin-bottom: 24px; }
+    .section-label {
+      font-size: 11px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.8px; color: var(--text2); margin-bottom: 10px; padding-left: 2px;
+    }
+    .card {
+      background: var(--card); border-radius: 10px;
+      border: 1px solid var(--border); overflow: hidden;
+    }
+    .row {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 14px 18px; border-bottom: 1px solid var(--border); gap: 16px;
+    }
+    .row:last-child { border-bottom: none; }
+    .row-left { flex: 1; min-width: 0; }
+    .row-title { font-size: 13px; color: var(--text); }
+    .row-desc { font-size: 12px; color: var(--text2); margin-top: 2px; line-height: 1.4; }
+    .row-desc.success { color: var(--green); }
+    .row-desc.muted { color: var(--text2); opacity: 0.7; }
+
+    /* Toggle */
+    .toggle {
+      position: relative; width: 38px; height: 22px;
+      background: #5f6368; border-radius: 11px; border: none;
+      cursor: pointer; transition: background 0.2s; flex-shrink: 0;
+    }
+    .toggle.on { background: var(--accent); }
+    .toggle::after {
+      content: ''; position: absolute; top: 3px; left: 3px;
+      width: 16px; height: 16px; background: #fff; border-radius: 50%;
+      transition: left 0.2s; box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+    }
+    .toggle.on::after { left: 19px; }
+
+    /* Select */
+    .sel {
+      background: var(--card2); color: var(--text);
+      border: 1px solid rgba(255,255,255,0.12); border-radius: 6px;
+      padding: 7px 10px; font-size: 13px; cursor: pointer; outline: none;
+      min-width: 140px; transition: border-color 0.15s;
+    }
+    .sel:focus { border-color: var(--accent); }
+    .sel option { background: #2d2e32; }
+
+    /* Buttons */
+    .btn {
+      padding: 8px 18px; border-radius: 6px; font-size: 13px; font-weight: 500;
+      cursor: pointer; border: none; transition: all 0.15s; flex-shrink: 0;
+    }
+    .btn-primary { background: var(--accent); color: #111; }
+    .btn-primary:hover { background: #a8c8ff; }
+    .btn-primary:disabled { background: #5f6368; color: #888; cursor: not-allowed; }
+    .btn-outline { background: transparent; color: var(--accent); border: 1px solid rgba(138,180,248,0.35); }
+    .btn-outline:hover { background: rgba(138,180,248,0.1); }
+
+    /* Toast */
+    #toast {
+      position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+      background: #3c3d42; color: var(--text); padding: 10px 20px; border-radius: 8px;
+      font-size: 13px; opacity: 0; transition: opacity 0.3s;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.4); pointer-events: none; z-index: 100;
+      display: flex; align-items: center; gap: 8px;
+    }
+    #toast.show { opacity: 1; }
+
+    /* YCB model hero */
+    .ycb-hero {
+      background: linear-gradient(135deg, #1a2a4a 0%, #1e2a3a 100%);
+      border-radius: 10px; padding: 18px 20px; margin-bottom: 10px;
+      border: 1px solid rgba(138,180,248,0.15);
+    }
+    .ycb-title {
+      font-size: 16px; font-weight: 600;
+      background: linear-gradient(90deg, #8ab4f8, #81c995);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      margin-bottom: 4px;
+    }
+    .ycb-sub { font-size: 12px; color: var(--text2); margin-bottom: 14px; }
+    .ycb-select-row { display: flex; align-items: center; gap: 12px; }
+    .ycb-model-label { font-size: 12px; color: var(--text2); }
+
+    /* About card */
+    .about-version { font-size: 28px; font-weight: 300; margin-bottom: 4px; }
+    .chip {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 3px 10px; border-radius: 12px;
+      background: rgba(138,180,248,0.1); border: 1px solid rgba(138,180,248,0.2);
+      color: var(--accent); font-size: 11px; margin-right: 6px; margin-top: 8px;
+    }
+  </style>
+</head>
+<body>
+
+<aside class="sidebar">
+  <div class="sidebar-header">
+    <div class="sidebar-logo"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 010 20 15 15 0 010-20"/></svg></div>
+    <div>
+      <div class="sidebar-title">Settings</div>
+      <div class="sidebar-sub">YCB Browser</div>
+    </div>
+  </div>
+  <nav class="sidebar-nav">
+    <a class="nav-item active" data-section="appearance"><span class="nav-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2v10l4.5 4.5"/></svg></span>Appearance</a>
+    <a class="nav-item" data-section="search"><span class="nav-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg></span>Search engine</a>
+    <a class="nav-item" data-section="default"><span class="nav-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 010 20 15 15 0 010-20"/></svg></span>Default browser</a>
+    <a class="nav-item" data-section="startup"><span class="nav-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg></span>On startup</a>
+    <a class="nav-item" data-section="ycb"><span class="nav-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="10" r="6"/><path d="M8 16c-2.5 1-4 2.5-4 4h16c0-1.5-1.5-3-4-4"/></svg></span>YCB - AI Model</a>
+    <a class="nav-item" data-section="privacy"><span class="nav-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L4 6v6c0 5 3.5 9.3 8 10.9C16.5 21.3 20 17 20 12V6L12 2z"/></svg></span>Data &amp; Privacy</a>
+    <a class="nav-item" data-section="about"><span class="nav-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg></span>About</a>
+  </nav>
+</aside>
+
+<main class="main">
+
+  <!-- Appearance -->
+  <div id="section-appearance">
+    <div class="page-title">Appearance</div>
+    <div class="page-sub">Customize how YCB Browser looks</div>
+    <div class="section">
+      <div class="section-label">Theme</div>
+      <div class="card">
+        <div class="row">
+          <div class="row-left">
+            <div class="row-title">Color theme</div>
+            <div class="row-desc" id="theme-desc">Currently using dark mode</div>
+          </div>
+          <select class="sel" id="theme-select">
+            <option value="dark">Dark (default)</option>
+            <option value="light">Light</option>
+          </select>
+        </div>
+        <div class="row">
+          <div class="row-left">
+            <div class="row-title">Show bookmarks bar</div>
+            <div class="row-desc">Display your bookmarks below the toolbar</div>
+          </div>
+          <button class="toggle" id="toggle-bookmarks"></button>
+        </div>
+      </div>
+    </div>
+    <div class="section">
+      <div class="section-label">Font size</div>
+      <div class="card">
+        <div class="row">
+          <div class="row-left">
+            <div class="row-title">Page font size</div>
+            <div class="row-desc">Controls the default size of text on web pages</div>
+          </div>
+          <select class="sel" id="font-size-select">
+            <option value="small">Small</option>
+            <option value="medium" selected>Medium (recommended)</option>
+            <option value="large">Large</option>
+            <option value="very-large">Very Large</option>
+          </select>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Search engine -->
+  <div id="section-search" style="display:none">
+    <div class="page-title">Search engine</div>
+    <div class="page-sub">Choose your default search engine for the address bar</div>
+    <div class="section">
+      <div class="card">
+        <div class="row">
+          <div class="row-left">
+            <div class="row-title">Address bar search engine</div>
+            <div class="row-desc">Used when you type a query in the address bar</div>
+          </div>
+          <select class="sel" id="search-engine-select">
+            <option value="google">Google</option>
+            <option value="bing">Bing</option>
+            <option value="duckduckgo">DuckDuckGo</option>
+            <option value="ecosia">Ecosia</option>
+            <option value="brave">Brave Search</option>
+            <option value="yahoo">Yahoo</option>
+          </select>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Default browser -->
+  <div id="section-default" style="display:none">
+    <div class="page-title">Default browser</div>
+    <div class="page-sub">Set YCB Browser as your default browser</div>
+    <div class="section">
+      <div class="card">
+        <div class="row">
+          <div class="row-left">
+            <div class="row-title">Make YCB Browser your default</div>
+            <div class="row-desc" id="default-status">Checking status...</div>
+          </div>
+          <button class="btn btn-primary" id="btn-set-default">Set as default</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- On startup -->
+  <div id="section-startup" style="display:none">
+    <div class="page-title">On startup</div>
+    <div class="page-sub">Choose what happens when you open YCB Browser</div>
+    <div class="section">
+      <div class="card">
+        <label class="row" style="cursor:pointer">
+          <div class="row-left">
+            <div class="row-title">Open the New Tab page</div>
+            <div class="row-desc">Start fresh every time</div>
+          </div>
+          <input type="radio" name="startup" value="newtab" id="startup-newtab" style="accent-color:#8ab4f8;width:16px;height:16px">
+        </label>
+        <label class="row" style="cursor:pointer">
+          <div class="row-left">
+            <div class="row-title">Continue where you left off</div>
+            <div class="row-desc">Reopen tabs from your last session</div>
+          </div>
+          <input type="radio" name="startup" value="continue" id="startup-continue" style="accent-color:#8ab4f8;width:16px;height:16px">
+        </label>
+      </div>
+    </div>
+  </div>
+
+  <!-- YCB -->
+  <div id="section-ycb" style="display:none">
+    <div class="page-title">YCB — Your Copilot Brain</div>
+    <div class="page-sub">Configure the AI model that powers your browser assistant</div>
+    <div class="ycb-hero">
+      <div class="ycb-title">Your Copilot Brain</div>
+      <div class="ycb-sub">Select which AI model powers the Copilot panel in your browser. Changes apply to your next message.</div>
+      <div class="ycb-select-row">
+        <span class="ycb-model-label">Active model:</span>
+        <select class="sel" id="model-select">
+          <option value="gpt-4.1">GPT-4.1</option>
+          <option value="gpt-5-mini">GPT-5 mini - Fast</option>
+          <option value="gpt-5.4-mini">GPT-5.4 mini - Fast</option>
+          <option value="gpt-5.1-codex-mini">GPT-5.1-Codex-Mini (Preview)</option>
+          <option value="gpt-5.1">GPT-5.1</option>
+          <option value="gpt-5.2">GPT-5.2</option>
+          <option value="gpt-5.3-codex">GPT-5.3-Codex</option>
+          <option value="gpt-5.4">GPT-5.4</option>
+          <option value="gpt-5.1-codex">GPT-5.1-Codex</option>
+          <option value="gpt-5.2-codex">GPT-5.2-Codex</option>
+          <option value="gpt-5.1-codex-max">GPT-5.1-Codex-Max</option>
+          <option value="claude-haiku-4.5">Claude Haiku 4.5 - Fast</option>
+          <option value="claude-sonnet-4">Claude Sonnet 4</option>
+          <option value="claude-sonnet-4.5">Claude Sonnet 4.5</option>
+          <option value="claude-sonnet-4.6">Claude Sonnet 4.6 - Best</option>
+          <option value="claude-opus-4.5">Claude Opus 4.5</option>
+          <option value="claude-opus-4.6">Claude Opus 4.6 - Most Capable</option>
+          <option value="claude-opus-4.6-fast">Claude Opus 4.6 Fast (Preview)</option>
+          <option value="gemini-3-pro-preview">Gemini 3 Pro (Preview)</option>
+        </select>
+      </div>
+    </div>
+    <div class="section">
+      <div class="card">
+        <div class="row">
+          <div class="row-left">
+            <div class="row-title">GitHub Copilot account</div>
+            <div class="row-desc" id="copilot-user">Loading...</div>
+          </div>
+        </div>
+        <div class="row">
+          <div class="row-left">
+            <div class="row-title">Copilot CLI location</div>
+            <div class="row-desc" id="copilot-cli-path" style="font-family:monospace;font-size:11px;word-break:break-all;">Detecting...</div>
+          </div>
+        </div>
+        <div class="row">
+          <div class="row-left">
+            <div class="row-title">Allow AI in Incognito</div>
+            <div class="row-desc">AI is disabled in Incognito by default to protect your privacy</div>
+          </div>
+          <button class="toggle" id="toggle-incognito-ai"></button>
+        </div>
+        <div id="incognito-ai-warning" style="display:none;margin:0 0 4px;padding:10px 14px;background:rgba(251,188,4,0.1);border-radius:8px;border:1px solid rgba(251,188,4,0.3);font-size:12px;color:#fbc004;line-height:1.5">
+          <strong>Privacy warning:</strong> When AI is enabled in Incognito, the AI can see which websites you are visiting. Incognito mode will <strong>not</strong> protect you from the AI.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- About -->
+  <div id="section-about" style="display:none">
+    <div class="page-title">About YCB Browser</div>
+    <div class="page-sub">Version information and credits</div>
+    <div class="section">
+      <div class="card">
+        <div class="row" style="flex-direction:column;align-items:flex-start;gap:10px;border:none;padding:22px 20px">
+          <div style="font-size:32px"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#8ab4f8" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 010 20 15 15 0 010-20"/></svg></div>
+          <div class="about-version">YCB Browser</div>
+          <div style="font-size:13px;color:var(--text2)">Version 1.0.0 - Built on WebView2</div>
+          <div style="font-size:13px;color:var(--text2);line-height:1.6">
+            Powered by <strong style="color:var(--text)">GitHub Copilot CLI</strong><br>
+            AI model: <code style="color:var(--accent);background:rgba(138,180,248,0.1);padding:2px 8px;border-radius:4px" id="about-model">gpt-4.1</code>
+          </div>
+          <div style="font-size:12px;color:var(--text2);line-height:1.8">
+            User ID: <code id="about-user-id" style="color:var(--text);background:rgba(255,255,255,0.06);padding:2px 8px;border-radius:4px;font-size:11px;letter-spacing:0.3px;cursor:pointer;user-select:all" title="Click to copy">—</code>
+          </div>
+          <div>
+            <span class="chip">YCB</span>
+            <span class="chip">AI Enhanced</span>
+            <span class="chip">WebView2</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Data & Privacy -->
+  <div id="section-privacy" style="display:none">
+    <div class="page-title">Data &amp; Privacy</div>
+    <div class="page-sub">Control what diagnostic information YCB Browser sends</div>
+
+    <div class="section">
+      <div class="section-label">Diagnostic Logging</div>
+      <div class="card">
+        <div class="row">
+          <div class="row-left">
+            <div class="row-title">Send diagnostic data</div>
+            <div class="row-desc" id="telemetry-desc">Helps us detect crashes and improve stability</div>
+          </div>
+          <button class="toggle" id="toggle-telemetry"></button>
+        </div>
+        <div class="row" style="flex-direction:column;align-items:flex-start;gap:0;padding:16px 18px">
+          <div style="font-size:12px;color:var(--text2);line-height:1.7">
+            <strong style="color:var(--text);font-size:13px">What we log</strong><br>
+            All data is anonymous, non-personal and used <em>only</em> for debugging:
+            <ul style="margin:8px 0 0 16px;display:flex;flex-direction:column;gap:4px">
+              <li>App launch &amp; WebView2 version — to detect startup failures</li>
+              <li>Navigation errors (domain only, never full URLs) — to find broken sites</li>
+              <li>Tab open/close counts — to detect memory leaks</li>
+              <li>Download outcomes (file type &amp; size, no filenames) — to catch download bugs</li>
+              <li>Password prompt shown/saved (domain only, never credentials) — to debug autofill</li>
+              <li>UI freeze &amp; crash reports — to fix hangs</li>
+            </ul>
+          </div>
+        </div>
+        <div id="telemetry-appreciate" class="row" style="border-top:1px solid var(--border);padding:14px 18px;gap:10px;align-items:flex-start">
+          <span style="font-size:18px;flex-shrink:0">💙</span>
+          <div style="font-size:12px;color:var(--text2);line-height:1.6">
+            <strong style="color:var(--text)">We'd appreciate you keeping this on.</strong><br>
+            Diagnostic data is the only way we can find and fix issues — we do <em>not</em> log your browsing history, passwords, URLs you visit, personal files, or any identifying information. This data is <strong style="color:var(--green)">never used for advertising, tracking, or any malicious purpose</strong>.
+          </div>
+        </div>
+        <div id="telemetry-off-notice" class="row" style="display:none;border-top:1px solid var(--border);padding:14px 18px;gap:10px;align-items:flex-start">
+          <span style="font-size:16px;flex-shrink:0">🔕</span>
+          <div style="font-size:12px;color:var(--text2);line-height:1.6">
+            Diagnostic logging is <strong style="color:var(--red)">off</strong>. We won't receive any data from your browser. You can turn it back on at any time.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-label">Your data stays yours</div>
+      <div class="card">
+        <div class="row"><div class="row-left"><div class="row-title">Browsing history</div><div class="row-desc">Stored locally on your device only. Never sent anywhere.</div></div><span style="color:var(--green);font-size:12px;font-weight:600">Local only</span></div>
+        <div class="row"><div class="row-left"><div class="row-title">Saved passwords</div><div class="row-desc">Encrypted with Windows DPAPI and stored on your device. Never transmitted.</div></div><span style="color:var(--green);font-size:12px;font-weight:600">Local only</span></div>
+        <div class="row"><div class="row-left"><div class="row-title">Bookmarks &amp; settings</div><div class="row-desc">Stored in your AppData folder. Never synced or uploaded.</div></div><span style="color:var(--green);font-size:12px;font-weight:600">Local only</span></div>
+        <div class="row"><div class="row-left"><div class="row-title">Full page URLs</div><div class="row-desc">Never sent in any log. Only the domain (e.g. "github.com") may appear in error reports.</div></div><span style="color:var(--green);font-size:12px;font-weight:600">Never logged</span></div>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<div id="toast">✓ Saved</div>
+
+<script>
+  // ── Navigation ────────────────────────────────────────────────────────────
+  const sections = ['appearance','search','default','startup','ycb','privacy','about'];
+  const navItems = document.querySelectorAll('.nav-item');
+
+  function showSection(name) {
+    sections.forEach(s => {
+      document.getElementById('section-' + s).style.display = s === name ? '' : 'none';
+    });
+    navItems.forEach(n => n.classList.toggle('active', n.dataset.section === name));
+    localStorage.setItem('settings_section', name);
+  }
+
+  navItems.forEach(n => {
+    n.addEventListener('click', e => { e.preventDefault(); showSection(n.dataset.section); });
+  });
+
+  const savedSection = localStorage.getItem('settings_section') || 'appearance';
+  showSection(savedSection);
+
+  // ── Toast ─────────────────────────────────────────────────────────────────
+  const toast = document.getElementById('toast');
+  let toastTimer;
+  function showToast(msg) {
+    toast.textContent = '✓ ' + (msg || 'Saved');
+    toast.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toast.classList.remove('show'), 2200);
+  }
+
+  // ── Load all settings from localStorage ──────────────────────────────────
+  function load(key, fallback) {
+    const v = localStorage.getItem(key);
+    return v !== null ? v : fallback;
+  }
+  function save(key, val) {
+    localStorage.setItem(key, val);
+    // Notify the parent renderer so it can apply the setting immediately
+    console.log('__settings__:SET:' + key + ':' + val);
+  }
+
+  // Bookmarks toggle
+  const bookmarksToggle = document.getElementById('toggle-bookmarks');
+  if (load('bookmarks_bar', 'off') === 'on') bookmarksToggle.classList.add('on');
+  bookmarksToggle.addEventListener('click', () => {
+    bookmarksToggle.classList.toggle('on');
+    save('bookmarks_bar', bookmarksToggle.classList.contains('on') ? 'on' : 'off');
+    showToast('Bookmarks bar ' + (bookmarksToggle.classList.contains('on') ? 'shown' : 'hidden'));
+  });
+
+  // Font size
+  const fontSel = document.getElementById('font-size-select');
+  fontSel.value = load('font_size', 'medium');
+  fontSel.addEventListener('change', () => { save('font_size', fontSel.value); showToast('Font size set to ' + fontSel.value); });
+
+  // Search engine
+  const searchSel = document.getElementById('search-engine-select');
+  searchSel.value = load('search_engine', 'google');
+  searchSel.addEventListener('change', () => { save('search_engine', searchSel.value); showToast('Search engine: ' + searchSel.value); });
+
+  // Startup
+  const savedStartup = load('startup_mode', 'newtab');
+  document.getElementById('startup-' + savedStartup).checked = true;
+  document.querySelectorAll('input[name="startup"]').forEach(r => {
+    r.addEventListener('change', () => { save('startup_mode', r.value); showToast('Startup: ' + r.value); });
+  });
+
+  // ── YCB Model ─────────────────────────────────────────────────────────────
+  const modelSel = document.getElementById('model-select');
+  modelSel.value = load('ycb_model', 'gpt-4.1');
+  modelSel.addEventListener('change', () => {
+    save('ycb_model', modelSel.value);
+    document.getElementById('about-model').textContent = modelSel.value;
+    showToast('YCB model: ' + modelSel.value);
+  });
+
+  // About model display
+  document.getElementById('about-model').textContent = load('ycb_model', 'gpt-4.1');
+
+  // ── Incognito AI toggle ───────────────────────────────────────────────────
+  const incognitoAiToggle = document.getElementById('toggle-incognito-ai');
+  const incognitoAiWarning = document.getElementById('incognito-ai-warning');
+  if (load('incognito_ai_enabled', 'false') === 'true') {
+    incognitoAiToggle.classList.add('on');
+    incognitoAiWarning.style.display = 'block';
+  }
+  incognitoAiToggle.addEventListener('click', () => {
+    const on = incognitoAiToggle.classList.toggle('on');
+    save('incognito_ai_enabled', on ? 'true' : 'false');
+    incognitoAiWarning.style.display = on ? 'block' : 'none';
+    showToast(on ? 'AI enabled in Incognito' : 'AI disabled in Incognito');
+  });
+
+  // ── Default Browser ───────────────────────────────────────────────────────
+  function setDefaultStatus(isDefault) {
+    const status = document.getElementById('default-status');
+    const btn = document.getElementById('btn-set-default');
+    if (isDefault) {
+      status.textContent = '✓ YCB is already your default browser';
+      status.className = 'row-desc success';
+      btn.textContent = '✓ Already default';
+      btn.disabled = true;
+    } else {
+      status.textContent = 'YCB is not set as your default browser';
+      status.className = 'row-desc';
+      btn.textContent = 'Set as default';
+      btn.disabled = false;
+    }
+  }
+
+  document.getElementById('btn-set-default').addEventListener('click', () => {
+    console.log('__browser__:' + JSON.stringify({type: 'setDefault'}));
+    setDefaultStatus(true);
+    showToast('Set as default browser');
+  });
+
+  // ── Auth / Copilot info ───────────────────────────────────────────────────
+  const userEl = document.getElementById('copilot-user');
+  const cliEl = document.getElementById('copilot-cli-path');
+  // Populated by parent via executeJavaScript injection when window.electronAPI not available
+  userEl.textContent = 'Loaded from Copilot CLI config';
+  cliEl.textContent = 'See terminal: where copilot';
+
+  // window.electronAPI is available if opened in the main window (not webview)
+  if (window.electronAPI) {
+    window.electronAPI.checkAuth().then(r => {
+      userEl.textContent = r.authenticated ? '@' + r.username + ' (signed in)' : 'Not signed in - run "copilot login"';
+      userEl.className = 'row-desc ' + (r.authenticated ? 'success' : '');
+    });
+    window.electronAPI.checkDefault().then(isDefault => setDefaultStatus(isDefault));
+  }
+
+  // ── Theme toggle ──────────────────────────────────────────────────────────
+  const themeSel = document.getElementById('theme-select');
+  const themeDesc = document.getElementById('theme-desc');
+  const currentTheme = load('browser_theme', 'dark');
+  themeSel.value = currentTheme;
+  themeDesc.textContent = 'Currently using ' + currentTheme + ' mode';
+  themeSel.addEventListener('change', () => {
+    save('browser_theme', themeSel.value);
+    themeDesc.textContent = 'Currently using ' + themeSel.value + ' mode';
+    showToast('Theme changed to ' + themeSel.value);
+  });
+
+  // ── Telemetry toggle ──────────────────────────────────────────────────────
+  const telemetryToggle = document.getElementById('toggle-telemetry');
+  const telemetryDesc   = document.getElementById('telemetry-desc');
+  const telemetryAppreciate = document.getElementById('telemetry-appreciate');
+  const telemetryOffNotice  = document.getElementById('telemetry-off-notice');
+
+  function applyTelemetryUI(on) {
+    telemetryToggle.classList.toggle('on', on);
+    telemetryDesc.textContent = on ? 'Helps us detect crashes and improve stability' : 'No diagnostic data is being sent';
+    telemetryAppreciate.style.display = on ? '' : 'none';
+    telemetryOffNotice.style.display  = on ? 'none' : '';
+  }
+
+  applyTelemetryUI(load('telemetry_enabled', 'true') !== 'false');
+  telemetryToggle.addEventListener('click', () => {
+    const on = !telemetryToggle.classList.contains('on');
+    applyTelemetryUI(on);
+    save('telemetry_enabled', on ? 'true' : 'false');
+    showToast(on ? 'Diagnostic logging enabled' : 'Diagnostic logging disabled');
+  });
+
+  // ── Load settings from C# backend ────────────────────────────────────────
+  window.loadSettings = function(data) {
+    if (!data) return;
+    // bookmarks_bar
+    if (data.bookmarks_bar !== undefined) {
+      const on = data.bookmarks_bar === 'on';
+      bookmarksToggle.classList.toggle('on', on);
+      localStorage.setItem('bookmarks_bar', data.bookmarks_bar);
+    }
+    // search_engine
+    if (data.search_engine !== undefined) {
+      searchSel.value = data.search_engine;
+      localStorage.setItem('search_engine', data.search_engine);
+    }
+    // startup_mode
+    if (data.startup_mode !== undefined) {
+      const radio = document.getElementById('startup-' + data.startup_mode);
+      if (radio) radio.checked = true;
+      localStorage.setItem('startup_mode', data.startup_mode);
+    }
+    // ycb_model
+    if (data.ycb_model !== undefined) {
+      modelSel.value = data.ycb_model;
+      document.getElementById('about-model').textContent = data.ycb_model;
+      localStorage.setItem('ycb_model', data.ycb_model);
+    }
+    // incognito_ai_enabled
+    if (data.incognito_ai_enabled !== undefined) {
+      const on = data.incognito_ai_enabled === 'true';
+      incognitoAiToggle.classList.toggle('on', on);
+      incognitoAiWarning.style.display = on ? 'block' : 'none';
+      localStorage.setItem('incognito_ai_enabled', data.incognito_ai_enabled);
+    }
+    // browser_theme
+    if (data.browser_theme !== undefined) {
+      themeSel.value = data.browser_theme;
+      themeDesc.textContent = 'Currently using ' + data.browser_theme + ' mode';
+      localStorage.setItem('browser_theme', data.browser_theme);
+    }
+    // telemetry_enabled
+    if (data.telemetry_enabled !== undefined) {
+      const on = data.telemetry_enabled !== 'false';
+      applyTelemetryUI(on);
+      localStorage.setItem('telemetry_enabled', data.telemetry_enabled);
+    }
+    // user_id
+    if (data.user_id) {
+      const el = document.getElementById('about-user-id');
+      if (el) {
+        el.textContent = data.user_id;
+        el.addEventListener('click', () => {
+          navigator.clipboard.writeText(data.user_id).then(() => {
+            const prev = el.textContent;
+            el.textContent = 'Copied!';
+            el.style.color = 'var(--green)';
+            setTimeout(() => { el.textContent = prev; el.style.color = ''; }, 1500);
+          });
+        });
+      }
+    }
+  };
+</script>
+</body>
+</html>

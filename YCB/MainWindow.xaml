@@ -1,0 +1,454 @@
+<Window x:Class="YCB.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
+        x:Name="BrowserWindow"
+        Title="YCB" Height="800" Width="1280"
+        WindowStyle="SingleBorderWindow" AllowsTransparency="False" Background="Transparent"
+        WindowStartupLocation="CenterScreen">
+    
+    <WindowChrome.WindowChrome>
+        <WindowChrome CaptionHeight="0" ResizeBorderThickness="5" GlassFrameThickness="-1" CornerRadius="0"/>
+    </WindowChrome.WindowChrome>
+    
+    <Grid x:Name="MainGrid" Background="#202124">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="36"/>  <!-- Tab strip: 36px -->
+            <RowDefinition Height="46"/>  <!-- Toolbar: 46px -->
+            <RowDefinition x:Name="BookmarksBarRow" Height="0"/>  <!-- Bookmarks bar -->
+            <RowDefinition x:Name="IncognitoBarRow" Height="0"/>  <!-- Incognito bar -->
+            <RowDefinition Height="*"/>   <!-- Content -->
+            <RowDefinition x:Name="DownloadShelfRow" Height="0"/>
+        </Grid.RowDefinitions>
+        
+        <!-- Tab Strip -->
+        <Grid Grid.Row="0" x:Name="TabStrip" Background="#202124" MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>  <!-- Tabs (only as wide as needed) -->
+                <ColumnDefinition Width="Auto"/>  <!-- New tab button -->
+                <ColumnDefinition Width="*"/>     <!-- Drag area fills all remaining space -->
+                <ColumnDefinition Width="Auto"/>  <!-- Window controls -->
+            </Grid.ColumnDefinitions>
+            
+            <!-- Tabs Container: padding-left 4px, align flex-end, max-width calc(100%-200px) -->
+            <ScrollViewer x:Name="TabsScroller" Grid.Column="0" 
+                          HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled"
+                          Margin="4,4,0,0" VerticalAlignment="Bottom">
+                <StackPanel x:Name="TabsPanel" Orientation="Horizontal"/>
+            </ScrollViewer>
+            
+            <!-- New Tab Button: 26x26, border-radius 50%, margin 0 2px 3px 2px -->
+            <Button x:Name="NewTabBtn" Click="AddTab_Click" Grid.Column="1"
+                    Width="26" Height="26" Margin="2,0,2,3" VerticalAlignment="Bottom"
+                    Style="{StaticResource NewTabBtnStyle}" ToolTip="New tab">
+                <!-- SVG: width=12 height=12 viewBox 0 0 12 12 -->
+                <Path Data="M6 1 L6 11 M1 6 L11 6" 
+                      Stroke="#9aa0a6" StrokeThickness="1.5" 
+                      StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                      Width="12" Height="12" Stretch="None"/>
+            </Button>
+            
+            <!-- Drag Area: flex:1 min-width:16px -->
+            <Border x:Name="DragArea" Grid.Column="2" Background="#01000000" MinWidth="16"
+                    MouseLeftButtonDown="TitleBar_MouseLeftButtonDown"/>
+            
+            <!-- Window Controls: height 36px, no border-radius -->
+            <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Top">
+                <!-- Minimize: 46x36 -->
+                <Button x:Name="MinBtn" Click="Minimize_Click" Style="{StaticResource WinBtnStyle}">
+                    <!-- SVG: width=10 height=1 rect -->
+                    <Rectangle Width="10" Height="1.5" Fill="#9aa0a6"/>
+                </Button>
+                <!-- Maximize: 46x36 -->
+                <Button x:Name="MaxRestoreBtn" Click="Maximize_Click" Style="{StaticResource WinBtnStyle}">
+                    <!-- SVG: 10x10 rect stroke 1.5 -->
+                    <Rectangle x:Name="MaxIcon" Width="8.5" Height="8.5" 
+                               Stroke="#9aa0a6" StrokeThickness="1.5" Fill="Transparent"/>
+                </Button>
+                <!-- Close: 46x36, red on hover -->
+                <Button x:Name="CloseBtn" Click="Close_Click" Style="{StaticResource CloseWinBtnStyle}">
+                    <!-- SVG: 10x10 X -->
+                    <Path Data="M1 1 L9 9 M9 1 L1 9" 
+                          Stroke="#9aa0a6" StrokeThickness="1.5"
+                          StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                          Width="10" Height="10" Stretch="None"/>
+                </Button>
+            </StackPanel>
+        </Grid>
+        
+        <!-- TOOLBAR - #35363a, height 46px, padding 0 6px, gap 2px -->
+        <Grid Grid.Row="1" x:Name="Toolbar" Background="#35363a">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>  <!-- Nav cluster -->
+                <ColumnDefinition Width="*"/>     <!-- Omnibox -->
+                <ColumnDefinition Width="Auto"/>  <!-- Actions -->
+            </Grid.ColumnDefinitions>
+            
+            <!-- Navigation Cluster -->
+            <StackPanel Grid.Column="0" Orientation="Horizontal" Margin="6,0,0,0">
+                <Button x:Name="BackBtn" Click="Back_Click" Style="{StaticResource NavBtnStyle}" 
+                        ToolTip="Back" IsEnabled="False">
+                    <Path Data="M12 4 L7 10 L12 16" 
+                          Stroke="#9aa0a6" StrokeThickness="1.8"
+                          StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
+                          Width="20" Height="20" Stretch="Uniform"/>
+                </Button>
+                <Button x:Name="ForwardBtn" Click="Forward_Click" Style="{StaticResource NavBtnStyle}" 
+                        ToolTip="Forward" IsEnabled="False">
+                    <Path Data="M8 4 L13 10 L8 16" 
+                          Stroke="#9aa0a6" StrokeThickness="1.8"
+                          StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
+                          Width="20" Height="20" Stretch="Uniform"/>
+                </Button>
+                <Button x:Name="RefreshBtn" Click="Refresh_Click" Style="{StaticResource NavBtnStyle}" 
+                        ToolTip="Reload page">
+                    <Canvas Width="18" Height="18">
+                        <Path Data="M15 9 A6 6 0 1 1 3 9" 
+                              Stroke="#9aa0a6" StrokeThickness="1.8" StrokeStartLineCap="Round" Fill="Transparent"/>
+                        <Path Data="M15 5 L15 9 L11 9" 
+                              Stroke="#9aa0a6" StrokeThickness="1.8" 
+                              StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/>
+                    </Canvas>
+                </Button>
+            </StackPanel>
+            
+            <!-- Omnibox: flex 1, margin 0 8px, border-radius 16px, height 32px -->
+            <Border Grid.Column="1" x:Name="OmniboxBorder" 
+                    Background="#292b2f" CornerRadius="16" 
+                    Margin="8,7" Height="32">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>  <!-- Security icon -->
+                        <ColumnDefinition Width="*"/>     <!-- Input -->
+                        <ColumnDefinition Width="Auto"/>  <!-- Bookmark -->
+                    </Grid.ColumnDefinitions>
+                    
+                    <!-- Security icon (clickable — opens site info panel) -->
+                    <Canvas x:Name="SecurityIconCanvas" Grid.Column="0" Width="13" Height="13" Margin="10,0,6,0"
+                            Cursor="Hand" MouseLeftButtonDown="SecurityIcon_Click" Background="Transparent">
+                        <Path x:Name="SecurityShield" Data="M7 1 L2 3.5 L2 7.5 C2 10 4.5 12.5 7 13 C9.5 12.5 12 10 12 7.5 L12 3.5 Z" 
+                              Stroke="#81c995" StrokeThickness="1.2" Fill="Transparent"/>
+                        <Path x:Name="SecurityCheck" Data="M5 7 L6.5 8.5 L9 5" 
+                              Stroke="#81c995" StrokeThickness="1.2" 
+                              StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/>
+                    </Canvas>
+                    
+                    <!-- URL Input with placeholder overlay -->
+                    <Grid Grid.Column="1">
+                        <TextBox x:Name="UrlBox"
+                                 Background="Transparent" Foreground="#e8eaed" CaretBrush="#8ab4f8"
+                                 BorderThickness="0" VerticalContentAlignment="Center"
+                                 FontSize="13" FontFamily="Segoe UI" Padding="0"
+                                 KeyDown="UrlBox_KeyDown" GotFocus="UrlBox_GotFocus" LostFocus="UrlBox_LostFocus" TextChanged="UrlBox_TextChanged"/>
+                        <!-- Placeholder text for URL bar -->
+                        <TextBlock x:Name="UrlPlaceholder"
+                                   Text="Search with Google"
+                                   Foreground="#5f6368"
+                                   FontSize="13" FontFamily="Segoe UI"
+                                   VerticalAlignment="Center"
+                                   IsHitTestVisible="False"
+                                   Visibility="Collapsed"/>
+                    </Grid>
+                    
+                    <!-- Bookmark Button -->
+                    <Button Grid.Column="2" x:Name="BookmarkBtn"
+                            Style="{StaticResource OmniBtnStyle}" 
+                            Click="BookmarkBtn_Click"
+                            ToolTip="Bookmark this tab" Margin="0,0,4,0">
+                        <Path x:Name="BookmarkStarPath"
+                              Data="M7.5 1.5 L9 6 L14 6 L10.25 8.7 L11.68 13.25 L7.5 10.5 L3.32 13.25 L4.75 8.7 L1 6 L5.95 6 Z" 
+                              Stroke="#9aa0a6" StrokeThickness="1.2" Fill="Transparent"
+                              Width="15" Height="15" Stretch="Uniform"/>
+                    </Button>
+                </Grid>
+            </Border>
+            
+            <!-- Toolbar Actions: gap 2px -->
+            <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="0,0,6,0">
+                <!-- Copilot Button -->
+                <Button x:Name="CopilotBtn" Click="Copilot_Click" Style="{StaticResource NavBtnStyle}" 
+                        ToolTip="Open Copilot">
+                    <Canvas Width="20" Height="20">
+                        <Ellipse Canvas.Left="5" Canvas.Top="3.33" Width="10" Height="10" 
+                                 Stroke="#9aa0a6" StrokeThickness="1.33" Fill="Transparent"/>
+                        <Ellipse Canvas.Left="6.67" Canvas.Top="6.25" Width="2.5" Height="2.5" Fill="#9aa0a6"/>
+                        <Ellipse Canvas.Left="10.83" Canvas.Top="6.25" Width="2.5" Height="2.5" Fill="#9aa0a6"/>
+                        <Path Canvas.Left="0" Canvas.Top="0" 
+                              Data="M7.5 10.42 Q10 12.08 12.5 10.42"
+                              Stroke="#9aa0a6" StrokeThickness="1" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                        <Path Canvas.Left="0" Canvas.Top="0"
+                              Data="M6.67 13.33 Q3.33 15 3.33 16.67 L16.67 16.67 Q16.67 15 13.33 13.33"
+                              Stroke="#9aa0a6" StrokeThickness="1.17" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                    </Canvas>
+                </Button>
+                
+                <!-- Menu Button (3 dots) -->
+                <Button x:Name="MenuBtn" Click="Menu_Click" Style="{StaticResource NavBtnStyle}" 
+                        ToolTip="Customize and control YCB">
+                    <Canvas Width="4" Height="18">
+                        <Ellipse Canvas.Left="0.5" Canvas.Top="0.5" Width="3" Height="3" Fill="#9aa0a6"/>
+                        <Ellipse Canvas.Left="0.5" Canvas.Top="7.5" Width="3" Height="3" Fill="#9aa0a6"/>
+                        <Ellipse Canvas.Left="0.5" Canvas.Top="14.5" Width="3" Height="3" Fill="#9aa0a6"/>
+                    </Canvas>
+                </Button>
+            </StackPanel>
+        </Grid>
+        
+        <!-- BOOKMARKS BAR - shown when enabled in settings -->
+        <Border x:Name="BookmarksBar" Grid.Row="2" Background="#292a2d" Visibility="Collapsed"
+                Padding="8,4">
+            <ScrollViewer HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled">
+                <StackPanel x:Name="BookmarksBarItems" Orientation="Horizontal"/>
+            </ScrollViewer>
+        </Border>
+        
+        <!-- INCOGNITO BAR - shown only when in incognito mode -->
+        <Border x:Name="IncognitoBar" Grid.Row="3" Background="#1a1b26" Visibility="Collapsed"
+                Padding="16,8">
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                <!-- Incognito Icon -->
+                <Canvas Width="16" Height="16" Margin="0,0,8,0">
+                    <Ellipse Canvas.Left="3" Canvas.Top="9" Width="5" Height="5" 
+                             Stroke="#9aa0a6" StrokeThickness="1.5" Fill="Transparent"/>
+                    <Ellipse Canvas.Left="8" Canvas.Top="9" Width="5" Height="5" 
+                             Stroke="#9aa0a6" StrokeThickness="1.5" Fill="Transparent"/>
+                    <Line X1="8" Y1="11.5" X2="8" Y2="11.5" Stroke="#9aa0a6" StrokeThickness="2"/>
+                    <Line X1="0" Y1="11.5" X2="3" Y2="11.5" Stroke="#9aa0a6" StrokeThickness="1.5" StrokeStartLineCap="Round"/>
+                    <Line X1="13" Y1="11.5" X2="16" Y2="11.5" Stroke="#9aa0a6" StrokeThickness="1.5" StrokeEndLineCap="Round"/>
+                    <Line X1="2" Y1="5" X2="14" Y2="5" Stroke="#9aa0a6" StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                </Canvas>
+                <TextBlock Text="Incognito" Foreground="#e8eaed" FontWeight="SemiBold" FontSize="13" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                <TextBlock x:Name="IncognitoDetail" Text="History, cookies and site data won't be saved. AI is disabled." 
+                           Foreground="#9aa0a6" FontSize="13" VerticalAlignment="Center"/>
+            </StackPanel>
+        </Border>
+        
+        <!-- MAIN CONTENT AREA -->
+        <Grid Grid.Row="4">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition x:Name="SidebarColumn" Width="0"/>
+            </Grid.ColumnDefinitions>
+            
+            <!-- WebView Container -->
+            <Grid x:Name="WebViewContainer" Grid.Column="0" Background="#ffffff"/>
+            
+            <!-- Copilot Sidebar: 340px, #1a1b26 -->
+            <Border x:Name="CopilotSidebar" Grid.Column="1" 
+                    Background="#1a1b26" Visibility="Collapsed">
+                <Border.BorderBrush>
+                    <SolidColorBrush Color="#FFFFFF" Opacity="0.08"/>
+                </Border.BorderBrush>
+                <Border.BorderThickness>1,0,0,0</Border.BorderThickness>
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    
+                    <!-- Header: padding 14px 16px 12px -->
+                    <Border Grid.Row="0" Padding="16,14,16,12">
+                        <Border.Background>
+                            <SolidColorBrush Color="#FFFFFF" Opacity="0.02"/>
+                        </Border.Background>
+                        <Border.BorderBrush>
+                            <SolidColorBrush Color="#FFFFFF" Opacity="0.08"/>
+                        </Border.BorderBrush>
+                        <Border.BorderThickness>0,0,0,1</Border.BorderThickness>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            
+                            <!-- Copilot Icon 22x22 in accent color -->
+                            <Canvas Grid.Column="0" Width="22" Height="22">
+                                <Ellipse Canvas.Left="5" Canvas.Top="3.67" Width="12" Height="11" 
+                                         Stroke="#8ab4f8" StrokeThickness="1.47" Fill="Transparent"/>
+                                <Ellipse Canvas.Left="7.33" Canvas.Top="6.83" Width="2.75" Height="2.75" Fill="#8ab4f8"/>
+                                <Ellipse Canvas.Left="11.92" Canvas.Top="6.83" Width="2.75" Height="2.75" Fill="#8ab4f8"/>
+                                <Path Data="M8.25 11.46 Q11 13.38 13.75 11.46"
+                                      Stroke="#8ab4f8" StrokeThickness="1.1" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                                <Path Data="M7.33 14.67 Q3.67 16.5 3.67 18.33 L18.33 18.33 Q18.33 16.5 14.67 14.67"
+                                      Stroke="#8ab4f8" StrokeThickness="1.28" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                            </Canvas>
+                            
+                            <StackPanel Grid.Column="1" Margin="10,0,0,0">
+                                <TextBlock Text="GitHub Copilot" Foreground="#e8eaed" FontSize="14" FontWeight="SemiBold"/>
+                                <TextBlock Text="Your AI browser assistant" Foreground="#9aa0a6" FontSize="11"/>
+                            </StackPanel>
+                            
+                            <!-- Close button: 28x28 rounded 6px -->
+                            <Button Grid.Column="2" Click="CloseCopilot_Click" Style="{StaticResource IconBtnStyle}">
+                                <Path Data="M1 1 L13 13 M13 1 L1 13" 
+                                      Stroke="#9aa0a6" StrokeThickness="1.5"
+                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                      Width="14" Height="14" Stretch="Uniform"/>
+                            </Button>
+                        </Grid>
+                    </Border>
+                    
+                    <!-- Messages Area -->
+                    <ScrollViewer Grid.Row="1" x:Name="CopilotMessages" 
+                                  VerticalScrollBarVisibility="Auto" Background="Transparent">
+                        <StackPanel x:Name="MessagesPanel" Margin="14"/>
+                    </ScrollViewer>
+                    
+                    <!-- Input Area -->
+                    <Border Grid.Row="2" Padding="12,10">
+                        <Border.Background>
+                            <SolidColorBrush Color="#FFFFFF" Opacity="0.02"/>
+                        </Border.Background>
+                        <Border.BorderBrush>
+                            <SolidColorBrush Color="#FFFFFF" Opacity="0.08"/>
+                        </Border.BorderBrush>
+                        <Border.BorderThickness>0,1,0,0</Border.BorderThickness>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <Border Grid.Column="0" Background="#2a2b36" CornerRadius="20" 
+                                    BorderBrush="#3d3e4a" BorderThickness="1">
+                                <TextBox x:Name="CopilotInput" 
+                                         Background="Transparent" Foreground="#e8eaed" CaretBrush="#8ab4f8"
+                                         BorderThickness="0" Padding="14,9" FontSize="13"
+                                         VerticalContentAlignment="Center"
+                                         KeyDown="CopilotInput_KeyDown"/>
+                            </Border>
+                            <Button Grid.Column="1" Click="SendCopilot_Click" 
+                                    Style="{StaticResource SendBtnStyle}" Margin="8,0,0,0">
+                                <Path Data="M1 8 L14 2 L9 8 L14 14 Z" Fill="#111" 
+                                      Width="16" Height="16" Stretch="Uniform"/>
+                            </Button>
+                        </Grid>
+                    </Border>
+                </Grid>
+            </Border>
+        </Grid>
+        
+        <!-- DOWNLOAD SHELF - #2d2e31, height 68px -->
+        <Border Grid.Row="5" x:Name="DownloadShelf" Background="#2d2e31" Visibility="Collapsed">
+            <Border.BorderBrush>
+                <SolidColorBrush Color="#FFFFFF" Opacity="0.1"/>
+            </Border.BorderBrush>
+            <Border.BorderThickness>0,1,0,0</Border.BorderThickness>
+            <Grid Height="68">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <ScrollViewer Grid.Column="0" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                    <StackPanel x:Name="DownloadItems" Orientation="Horizontal" Margin="12,0"/>
+                </ScrollViewer>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="8,0,12,0" VerticalAlignment="Center">
+                    <Button Content="See all downloads" Click="SeeAllDownloads_Click" Style="{StaticResource LinkBtnStyle}"/>
+                    <Button Click="CloseDownloadShelf_Click" Style="{StaticResource IconBtnStyle}" Margin="6,0,0,0">
+                        <Path Data="M1 1 L9 9 M9 1 L1 9" 
+                              Stroke="#9aa0a6" StrokeThickness="1.5"
+                              StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                              Width="10" Height="10" Stretch="Uniform"/>
+                    </Button>
+                </StackPanel>
+            </Grid>
+        </Border>
+        
+        <!-- MENU POPUP - #2d2e31, border-radius 6px, shadow -->
+        <Popup x:Name="MenuPopup" StaysOpen="False" Placement="Bottom" 
+               PlacementTarget="{Binding ElementName=MenuBtn}" 
+               AllowsTransparency="True" HorizontalOffset="-180">
+            <Border Background="#2d2e31" CornerRadius="6" Padding="0,6" MinWidth="220">
+                <Border.BorderBrush>
+                    <SolidColorBrush Color="#FFFFFF" Opacity="0.07"/>
+                </Border.BorderBrush>
+                <Border.BorderThickness>1</Border.BorderThickness>
+                <Border.Effect>
+                    <DropShadowEffect BlurRadius="24" Opacity="0.6" ShadowDepth="6" Color="#000000"/>
+                </Border.Effect>
+                <StackPanel>
+                    <Button Click="MenuNewTab_Click" Style="{StaticResource MenuItemStyle}">
+                        <Grid Width="184">
+                            <TextBlock Text="New tab" HorizontalAlignment="Left"/>
+                            <TextBlock Text="Ctrl+T" HorizontalAlignment="Right" Foreground="#9aa0a6" FontSize="12"/>
+                        </Grid>
+                    </Button>
+                    <Button Click="MenuNewWindow_Click" Style="{StaticResource MenuItemStyle}">
+                        <Grid Width="184">
+                            <TextBlock Text="New window" HorizontalAlignment="Left"/>
+                            <TextBlock Text="Ctrl+N" HorizontalAlignment="Right" Foreground="#9aa0a6" FontSize="12"/>
+                        </Grid>
+                    </Button>
+                    <Button Click="MenuNewIncognitoWindow_Click" Style="{StaticResource MenuItemStyle}">
+                        <Grid Width="184">
+                            <TextBlock Text="New incognito window" HorizontalAlignment="Left"/>
+                            <TextBlock Text="Ctrl+Shift+N" HorizontalAlignment="Right" Foreground="#9aa0a6" FontSize="11"/>
+                        </Grid>
+                    </Button>
+                    <Border Height="1" Margin="0,4">
+                        <Border.Background>
+                            <SolidColorBrush Color="#FFFFFF" Opacity="0.08"/>
+                        </Border.Background>
+                    </Border>
+                    <Button Click="MenuSettings_Click" Style="{StaticResource MenuItemStyle}">
+                        <TextBlock Text="Settings"/>
+                    </Button>
+                    <Button Click="MenuHistory_Click" Style="{StaticResource MenuItemStyle}">
+                        <Grid Width="184">
+                            <TextBlock Text="History" HorizontalAlignment="Left"/>
+                            <TextBlock Text="Ctrl+H" HorizontalAlignment="Right" Foreground="#9aa0a6" FontSize="12"/>
+                        </Grid>
+                    </Button>
+                    <Button Click="MenuDownloads_Click" Style="{StaticResource MenuItemStyle}">
+                        <Grid Width="184">
+                            <TextBlock Text="Downloads" HorizontalAlignment="Left"/>
+                            <TextBlock Text="Ctrl+J" HorizontalAlignment="Right" Foreground="#9aa0a6" FontSize="12"/>
+                        </Grid>
+                    </Button>
+                    <Button Click="MenuPasswords_Click" Style="{StaticResource MenuItemStyle}">
+                        <TextBlock Text="Password Manager"/>
+                    </Button>
+                    <Border Height="1" Margin="0,4">
+                        <Border.Background>
+                            <SolidColorBrush Color="#FFFFFF" Opacity="0.08"/>
+                        </Border.Background>
+                    </Border>
+                    <Button Click="ZoomIn_Click" Style="{StaticResource MenuItemStyle}">
+                        <TextBlock Text="Zoom in"/>
+                    </Button>
+                    <Button Click="ZoomOut_Click" Style="{StaticResource MenuItemStyle}">
+                        <TextBlock Text="Zoom out"/>
+                    </Button>
+                    <Border Height="1" Margin="0,4">
+                        <Border.Background>
+                            <SolidColorBrush Color="#FFFFFF" Opacity="0.08"/>
+                        </Border.Background>
+                    </Border>
+                    <Button Click="Print_Click" Style="{StaticResource MenuItemStyle}">
+                        <Grid Width="184">
+                            <TextBlock Text="Print..." HorizontalAlignment="Left"/>
+                            <TextBlock Text="Ctrl+P" HorizontalAlignment="Right" Foreground="#9aa0a6" FontSize="12"/>
+                        </Grid>
+                    </Button>
+                    <Border Height="1" Margin="0,4">
+                        <Border.Background>
+                            <SolidColorBrush Color="#FFFFFF" Opacity="0.08"/>
+                        </Border.Background>
+                    </Border>
+                    <Button x:Name="ThemeToggle" Click="ToggleTheme_Click" Style="{StaticResource MenuItemStyle}">
+                        <TextBlock Text="Light Mode"/>
+                    </Button>
+                    <Border Height="1" Margin="0,4">
+                        <Border.Background>
+                            <SolidColorBrush Color="#FFFFFF" Opacity="0.08"/>
+                        </Border.Background>
+                    </Border>
+                    <Button Click="MenuGuide_Click" Style="{StaticResource MenuItemStyle}">
+                        <TextBlock Text="Help &amp; Guide"/>
+                    </Button>
+                </StackPanel>
+            </Border>
+        </Popup>
+    </Grid>
+</Window>
