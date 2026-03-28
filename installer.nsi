@@ -63,6 +63,12 @@ webview2_ok:
     DetailPrint "Installing YCB..."
     File /r "publish\*"
 
+    ; === Create persistent user ID in AppData if one doesn't already exist ===
+    DetailPrint "Setting up user profile..."
+    nsExec::ExecToStack 'powershell -NoProfile -Command "$p=[System.IO.Path]::Combine($env:APPDATA,\"YCB-Browser\"); New-Item -Force -ItemType Directory $p | Out-Null; $f=[System.IO.Path]::Combine($p,\"user_id.txt\"); if (-not (Test-Path $f)) { [System.Guid]::NewGuid().ToString() | Set-Content $f -NoNewline }"'
+    Pop $0
+    Pop $0
+
     WriteUninstaller "$INSTDIR\Uninstall.exe"
 
     CreateDirectory "$SMPROGRAMS\YCB"

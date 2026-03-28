@@ -1125,6 +1125,23 @@ public partial class MainWindow : Window
                         };
                         var settingsDataJson = JsonSerializer.Serialize(settingsData);
                         await webView.ExecuteScriptAsync($"window.loadSettings && window.loadSettings({settingsDataJson})");
+                        
+                        // Directly inject user ID into the About section element
+                        var safeUid = JsonSerializer.Serialize(ErrorReporter.UserId);
+                        await webView.ExecuteScriptAsync($@"
+                            (function() {{
+                                var el = document.getElementById('about-user-id');
+                                if (!el) return;
+                                el.textContent = {safeUid};
+                                el.onclick = function() {{
+                                    navigator.clipboard.writeText({safeUid}).then(function() {{
+                                        el.textContent = 'Copied!';
+                                        el.style.color = 'var(--green, #81c995)';
+                                        setTimeout(function() {{ el.textContent = {safeUid}; el.style.color = ''; }}, 1500);
+                                    }});
+                                }};
+                            }})();
+                        ");
                         break;
                         
                     case "newtab":
