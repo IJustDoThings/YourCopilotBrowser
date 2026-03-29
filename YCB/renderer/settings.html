@@ -285,7 +285,6 @@
       <div class="ycb-select-row">
         <span class="ycb-model-label">Active model:</span>
         <select class="sel" id="model-select">
-          <option value="gpt-4.1">GPT-4.1</option>
           <option value="gpt-5-mini">GPT-5 mini - Fast</option>
           <option value="gpt-5.4-mini">GPT-5.4 mini - Fast</option>
           <option value="gpt-5.1-codex-mini">GPT-5.1-Codex-Mini (Preview)</option>
@@ -347,7 +346,7 @@
           <div style="font-size:13px;color:var(--text2)">Version 1.0.0 - Built on WebView2</div>
           <div style="font-size:13px;color:var(--text2);line-height:1.6">
             Powered by <strong style="color:var(--text)">GitHub Copilot CLI</strong><br>
-            AI model: <code style="color:var(--accent);background:rgba(138,180,248,0.1);padding:2px 8px;border-radius:4px" id="about-model">gpt-4.1</code>
+            AI model: <code style="color:var(--accent);background:rgba(138,180,248,0.1);padding:2px 8px;border-radius:4px" id="about-model">gpt-5-mini</code>
           </div>
           <div style="font-size:12px;color:var(--text2);line-height:1.8">
             User ID: <code id="about-user-id" style="color:var(--text);background:rgba(255,255,255,0.06);padding:2px 8px;border-radius:4px;font-size:11px;letter-spacing:0.3px;cursor:pointer;user-select:all" title="Click to copy">—</code>
@@ -491,7 +490,7 @@
 
   // ── YCB Model ─────────────────────────────────────────────────────────────
   const modelSel = document.getElementById('model-select');
-  modelSel.value = load('ycb_model', 'gpt-4.1');
+  modelSel.value = load('ycb_model', 'gpt-5-mini');
   modelSel.addEventListener('change', () => {
     save('ycb_model', modelSel.value);
     document.getElementById('about-model').textContent = modelSel.value;
@@ -499,7 +498,7 @@
   });
 
   // About model display
-  document.getElementById('about-model').textContent = load('ycb_model', 'gpt-4.1');
+  document.getElementById('about-model').textContent = load('ycb_model', 'gpt-5-mini');
 
   // ── Incognito AI toggle ───────────────────────────────────────────────────
   const incognitoAiToggle = document.getElementById('toggle-incognito-ai');

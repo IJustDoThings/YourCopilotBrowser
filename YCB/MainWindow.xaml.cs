@@ -2287,17 +2287,6 @@ public partial class MainWindow : Window
     
     private void AttachImage_Click(object sender, RoutedEventArgs e)
     {
-        var model = (_settings.YcbModel ?? "gpt-5-mini").Trim().ToLowerInvariant();
-        if (model == "gpt-4.1" || model.Contains("4.1"))
-        {
-            ImagePickerPopup.IsOpen = false;
-            System.Windows.MessageBox.Show(
-                "Images are not supported on gpt-4.1.\n\nGo to Settings and switch to a different model to use image features.",
-                "Not Supported",
-                System.Windows.MessageBoxButton.OK,
-                System.Windows.MessageBoxImage.Warning);
-            return;
-        }
         ImagePickerPopup.IsOpen = !ImagePickerPopup.IsOpen;
     }
 
