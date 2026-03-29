@@ -977,6 +977,7 @@ public partial class MainWindow : Window
     private void Navigate(string input)
     {
         if (_activeTabIndex < 0 || _activeTabIndex >= _tabs.Count) return;
+        SuggestPopup.IsOpen = false;
         
         var url = input.Trim();
         
@@ -2100,6 +2101,16 @@ public partial class MainWindow : Window
         }
     }
 
+    private void Window_PreviewMouseDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (!SuggestPopup.IsOpen) return;
+        // Close popup if click is outside the omnibox and suggestion popup
+        var clickedInOmni = OmniboxBorder.IsMouseOver;
+        var clickedInPopup = SuggestPopup.Child?.IsMouseOver == true;
+        if (!clickedInOmni && !clickedInPopup)
+            SuggestPopup.IsOpen = false;
+    }
+
     private void UrlBox_PreviewKeyDown(object sender, KeyEventArgs e)
     {
         if (!SuggestPopup.IsOpen) return;
@@ -2125,13 +2136,36 @@ public partial class MainWindow : Window
     private void UrlBox_TextChanged(object sender, TextChangedEventArgs e)
     {
         UpdateUrlPlaceholder();
-        _ = UpdateSuggestionsAsync(UrlBox.Text);
+        // URL detection: has a dot, no spaces, or starts with http(s)://
+        var text = UrlBox.Text;
+        var looksLikeUrl = !string.IsNullOrWhiteSpace(text) &&
+                           !text.Contains(' ') &&
+                           (text.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+                            text.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
+                            (text.Contains('.') && !text.StartsWith("ycb://")));
+        if (looksLikeUrl)
+        {
+            UrlBox.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#8ab4f8")!);
+            UrlBox.TextDecorations = TextDecorations.Underline;
+        }
+        else
+        {
+            UrlBox.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#e8eaed")!);
+            UrlBox.TextDecorations = null;
+        }
+        if (!string.IsNullOrWhiteSpace(text))
+            _ = UpdateSuggestionsAsync(text);
+        else
+            SuggestPopup.IsOpen = false;
     }
     
     private void UrlBox_GotFocus(object sender, RoutedEventArgs e)
     {
         OmniboxBorder.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#3c4043")!);
         UrlPlaceholder.Visibility = Visibility.Collapsed;
+        // Reset URL styling so editing starts clean
+        UrlBox.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#e8eaed")!);
+        UrlBox.TextDecorations = null;
         
         // Show actual URL when focused (for editing), but never expose file:// internal paths
         if (_activeTabIndex >= 0 && _activeTabIndex < _tabs.Count)

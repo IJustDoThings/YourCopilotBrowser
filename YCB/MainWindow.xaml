@@ -5,7 +5,8 @@
         x:Name="BrowserWindow"
         Title="YCB" Height="800" Width="1280"
         WindowStyle="SingleBorderWindow" AllowsTransparency="False" Background="Transparent"
-        WindowStartupLocation="CenterScreen">
+        WindowStartupLocation="CenterScreen"
+        PreviewMouseDown="Window_PreviewMouseDown">
     
     <WindowChrome.WindowChrome>
         <WindowChrome CaptionHeight="0" ResizeBorderThickness="5" GlassFrameThickness="-1" CornerRadius="0"/>
