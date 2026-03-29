@@ -6,6 +6,23 @@ labels: bug
 assignees: ''
 ---
 
+## Please report bugs via our Discord support server
+
+We handle bug reports through Discord tickets so we can help you faster.
+
+**Here's how to submit a bug report:**
+
+1. Join our Discord server: **https://discord.gg/aAdbexZVVN**
+2. Go to the **#support** channel
+3. Create a ticket and describe the issue you're experiencing
+4. When the ticket form asks for your **User ID**, open YCB Browser, go to **Settings > About**, copy your User ID and paste it into the ticket
+
+Your User ID helps us look up your error logs so we can diagnose the problem.
+
+---
+
+*If you still want to file a GitHub issue instead, fill in the details below.*
+
 **Describe the bug**
 A clear description of what the bug is.
 
@@ -18,7 +35,7 @@ A clear description of what the bug is.
 What you expected to happen.
 
 **Screenshots**
-If applicable, add screenshots to help explain the problem.
+If applicable, add screenshots.
 
 **Environment**
 - YCB Version: (found in Settings > About)
@@ -26,4 +43,4 @@ If applicable, add screenshots to help explain the problem.
 - WebView2 Version: (found in Settings > About)
 
 **User ID**
-Your User ID from Settings > About (helps us look up your error logs).
+Found in Settings > About inside YCB Browser.
