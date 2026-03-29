@@ -2290,14 +2290,12 @@ public partial class MainWindow : Window
         var model = (_settings.YcbModel ?? "gpt-5-mini").Trim().ToLowerInvariant();
         if (model == "gpt-4.1" || model.Contains("4.1"))
         {
-            // Open sidebar if hidden so user sees the message
-            if (!_copilotVisible)
-            {
-                _copilotVisible = true;
-                CopilotSidebar.Visibility = Visibility.Visible;
-                SidebarColumn.Width = new GridLength(340);
-            }
-            AddCopilotMessage("Images are not supported on gpt-4.1. Switch to a different model in Settings to use image features.", false);
+            ImagePickerPopup.IsOpen = false;
+            System.Windows.MessageBox.Show(
+                "Images are not supported on gpt-4.1.\n\nGo to Settings and switch to a different model to use image features.",
+                "Not Supported",
+                System.Windows.MessageBoxButton.OK,
+                System.Windows.MessageBoxImage.Warning);
             return;
         }
         ImagePickerPopup.IsOpen = !ImagePickerPopup.IsOpen;
