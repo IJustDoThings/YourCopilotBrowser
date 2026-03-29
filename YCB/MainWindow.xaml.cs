@@ -134,6 +134,12 @@ public partial class MainWindow : Window
                 await CreateTab(url);
             }
         }
+        else if (!_isIncognito && _settings.StartupMode == "ask" && _settings.LastTabs?.Count > 0)
+        {
+            await CreateTab(_settings.HomePage ?? "ycb://newtab");
+            await Task.Delay(250); // let window render before showing prompt
+            ShowRestorePrompt();
+        }
         else
         {
             await CreateTab(_settings.HomePage ?? "ycb://newtab");
@@ -3493,6 +3499,117 @@ public partial class MainWindow : Window
         mainGrid.Children.Add(btnStack);
 
         border.Child = mainGrid;
+        popup.Content = border;
+        popup.Deactivated += (s, a) => { try { if (popup.IsVisible) popup.Close(); } catch { } };
+        popup.Show();
+    }
+
+    private void ShowRestorePrompt()
+    {
+        var count = _settings.LastTabs?.Count ?? 0;
+        if (count == 0) return;
+
+        var popup = new Window
+        {
+            WindowStyle = WindowStyle.None,
+            AllowsTransparency = true,
+            Background = Brushes.Transparent,
+            ShowInTaskbar = false,
+            Topmost = true,
+            Owner = this,
+            Width = 300,
+            SizeToContent = SizeToContent.Height,
+            WindowStartupLocation = WindowStartupLocation.Manual
+        };
+
+        var pt = BookmarkBtn.PointToScreen(new Point(BookmarkBtn.ActualWidth / 2, BookmarkBtn.ActualHeight));
+        popup.Left = pt.X - 280;
+        popup.Top  = pt.Y + 6;
+
+        var border = new Border
+        {
+            Background      = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#292a2d")!),
+            CornerRadius    = new CornerRadius(8),
+            BorderBrush     = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#3c4043")!),
+            BorderThickness = new Thickness(1),
+            Padding         = new Thickness(16, 14, 16, 14)
+        };
+        border.Effect = new System.Windows.Media.Effects.DropShadowEffect
+        {
+            BlurRadius = 16, ShadowDepth = 4, Opacity = 0.35, Color = Colors.Black
+        };
+
+        var stack = new StackPanel();
+
+        // Icon + title row
+        var titleRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 4) };
+        var iconPath = new WpfPath
+        {
+            Data = Geometry.Parse("M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0h6"),
+            Stroke = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#8ab4f8")!),
+            StrokeThickness = 1.6, Fill = Brushes.Transparent,
+            Width = 16, Height = 16, Stretch = Stretch.Uniform,
+            Margin = new Thickness(0, 1, 8, 0),
+            StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round,
+            StrokeLineJoin = PenLineJoin.Round
+        };
+        var titleBlock = new TextBlock
+        {
+            Text = "Restore your tabs?",
+            Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#e8eaed")!),
+            FontSize = 13, FontWeight = FontWeights.Medium
+        };
+        titleRow.Children.Add(iconPath);
+        titleRow.Children.Add(titleBlock);
+        stack.Children.Add(titleRow);
+
+        var subBlock = new TextBlock
+        {
+            Text = $"You had {count} tab{(count == 1 ? "" : "s")} open last time",
+            Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#9aa0a6")!),
+            FontSize = 12, Margin = new Thickness(0, 0, 0, 14)
+        };
+        stack.Children.Add(subBlock);
+
+        // Buttons
+        var btnRow = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+
+        var freshBtn = new Button
+        {
+            Content = "Start fresh", FontSize = 12,
+            Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#9aa0a6")!),
+            Background = Brushes.Transparent, BorderThickness = new Thickness(0),
+            Padding = new Thickness(10, 6, 10, 6), Margin = new Thickness(0, 0, 8, 0),
+            Cursor = System.Windows.Input.Cursors.Hand
+        };
+        freshBtn.Click += (s, e) => popup.Close();
+
+        var restoreBtn = new Button
+        {
+            Content = "Restore", FontSize = 12,
+            Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#8ab4f8")!),
+            Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#1a2a3a")!),
+            BorderBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#8ab4f8")!),
+            BorderThickness = new Thickness(1),
+            Padding = new Thickness(14, 6, 14, 6),
+            Cursor = System.Windows.Input.Cursors.Hand
+        };
+        restoreBtn.Click += async (s, e) =>
+        {
+            popup.Close();
+            var tabsToRestore = _settings.LastTabs!.ToList();
+            // Close the placeholder new tab, then restore
+            foreach (var url in tabsToRestore)
+                await CreateTab(url);
+            if (_tabs.Count > tabsToRestore.Count)
+                CloseTab(0);
+        };
+
+        btnRow.Children.Add(freshBtn);
+        btnRow.Children.Add(restoreBtn);
+        stack.Children.Add(btnRow);
+
+        border.Child = stack;
         popup.Content = border;
         popup.Deactivated += (s, a) => { try { if (popup.IsVisible) popup.Close(); } catch { } };
         popup.Show();
