@@ -1428,12 +1428,13 @@ public partial class MainWindow : Window
                             var payload = JsonSerializer.Serialize(new { userId, subject, body });
                             var content = new System.Net.Http.StringContent(payload, System.Text.Encoding.UTF8, "application/json");
                             var resp = await http.PostAsync("https://ycb.tomcreations.org/Support/Ticket/", content);
+                            var statusCode = (int)resp.StatusCode;
                             var ok = resp.IsSuccessStatusCode;
-                            await svw.ExecuteScriptAsync($"window.onSubmitResult && window.onSubmitResult({(ok ? "true" : "false")})");
+                            await svw.ExecuteScriptAsync($"window.onSubmitResult && window.onSubmitResult({(ok ? "true" : "false")}, {statusCode})");
                         }
                         catch
                         {
-                            await svw.ExecuteScriptAsync("window.onSubmitResult && window.onSubmitResult(false)");
+                            await svw.ExecuteScriptAsync("window.onSubmitResult && window.onSubmitResult(false, 0)");
                         }
                     }
                     break;

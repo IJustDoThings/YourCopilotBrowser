@@ -511,9 +511,6 @@
                     <Button Click="MenuSupport_Click" Style="{StaticResource MenuItemStyle}">
                         <TextBlock Text="Support"/>
                     </Button>
-                    <Button Click="MenuSupport_Click" Style="{StaticResource MenuItemStyle}">
-                        <TextBlock Text="Support"/>
-                    </Button>
                 </StackPanel>
             </Border>
         </Popup>

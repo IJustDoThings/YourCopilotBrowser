@@ -16,10 +16,14 @@
       padding: 18px 32px 14px;
     }
     header h1 { font-size: 22px; font-weight: 400; }
-    #content { max-width: 640px; margin: 0 auto; padding: 32px 16px 60px; }
-    .desc { color: #9aa0a6; font-size: 13px; margin-bottom: 28px; line-height: 1.6; }
+    header p  { font-size: 13px; color: #9aa0a6; margin-top: 4px; }
+    #content  { max-width: 640px; margin: 0 auto; padding: 32px 16px 60px; }
+    .desc { color: #9aa0a6; font-size: 13px; margin-bottom: 28px; line-height: 1.7; }
     .field { margin-bottom: 18px; }
-    label { display: block; font-size: 12px; font-weight: 600; color: #9aa0a6; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
+    label {
+      display: block; font-size: 12px; font-weight: 600; color: #9aa0a6;
+      text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px;
+    }
     input[type=text], textarea {
       width: 100%; background: #2a2b36; border: 1px solid #3d3e4a;
       border-radius: 8px; padding: 10px 14px; color: #e8eaed;
@@ -28,18 +32,12 @@
     }
     input[type=text]:focus, textarea:focus { border-color: #8ab4f8; }
     textarea { resize: vertical; min-height: 140px; }
-    .user-id-row {
-      display: flex; align-items: center; gap: 10px;
-      background: #2a2b36; border: 1px solid #3d3e4a;
-      border-radius: 8px; padding: 10px 14px;
-    }
-    .user-id-val { flex: 1; color: #8ab4f8; font-size: 13px; font-family: monospace; }
     .btn-submit {
       background: #8ab4f8; color: #111; border: none;
       border-radius: 8px; padding: 11px 28px; font-size: 14px;
       font-weight: 600; cursor: pointer; transition: opacity 0.15s;
     }
-    .btn-submit:hover { opacity: 0.85; }
+    .btn-submit:hover  { opacity: 0.85; }
     .btn-submit:disabled { opacity: 0.4; cursor: not-allowed; }
     #status { margin-top: 16px; font-size: 13px; min-height: 20px; }
     .ok  { color: #81c995; }
@@ -47,20 +45,16 @@
   </style>
 </head>
 <body>
-  <header><h1>Support</h1></header>
+  <header>
+    <h1>Support</h1>
+    <p>Submit a ticket and we'll get back to you</p>
+  </header>
   <div id="content">
-    <p class="desc">Having an issue? Fill out the form below and we'll look into it. Include as much detail as possible — your User ID is attached automatically so we can look up your error logs.</p>
-
-    <div class="field">
-      <label>Your User ID</label>
-      <div class="user-id-row">
-        <span class="user-id-val" id="uid">Loading…</span>
-      </div>
-    </div>
+    <p class="desc">Having an issue? Fill in the form below. Your User ID is attached automatically so we can look up your logs and help you faster.</p>
 
     <div class="field">
       <label>Subject</label>
-      <input type="text" id="subject" placeholder="Brief description of the issue">
+      <input type="text" id="subject" placeholder="Brief description of the issue" maxlength="120">
     </div>
 
     <div class="field">
@@ -73,70 +67,50 @@
   </div>
 
   <script>
-    const api = {
-      postMessage: (type, data) => {
-        if (window.chrome && window.chrome.webview)
-          window.chrome.webview.postMessage({ type, ...data });
+    let _userId = '';
+
+    window.setUserId = id => { _userId = id; };
+
+    window.onSubmitResult = (ok, statusCode) => {
+      const btn = document.getElementById('btn-submit');
+      btn.disabled = false;
+      btn.textContent = 'Send Ticket';
+      const el = document.getElementById('status');
+      if (ok) {
+        el.className = 'ok';
+        el.textContent = '✓ Ticket sent! We\'ll get back to you.';
+        document.getElementById('subject').value = '';
+        document.getElementById('body').value = '';
+      } else if (statusCode === 404) {
+        el.className = 'err';
+        el.textContent = '✗ Ticket endpoint not found (404). Please contact support directly.';
+      } else {
+        el.className = 'err';
+        el.textContent = '✗ Failed to send. Check your connection and try again.';
       }
-    };
-
-    // Load user ID
-    api.postMessage('settings:getUserId');
-
-    // Intercept the getUserId script injection to also set uid field
-    const _origExec = window.__ycbUserId__;
-    window.addEventListener('message', () => {});
-
-    // C# injects the user ID via ExecuteScript into the about-user-id element
-    // We also need it here — request it via a known pattern
-    // Watch for the element or use MutationObserver trick
-    const observer = new MutationObserver(() => {
-      const el = document.getElementById('about-user-id');
-      if (el && el.textContent) {
-        document.getElementById('uid').textContent = el.textContent;
-        observer.disconnect();
-      }
-    });
-    observer.observe(document.body, { childList: true, subtree: true });
-
-    // Also set via direct WebMessage from C# side using support:getUserId
-    api.postMessage('support:getUserId');
-
-    window.setUserId = function(id) {
-      document.getElementById('uid').textContent = id;
     };
 
     document.getElementById('btn-submit').addEventListener('click', () => {
       const subject = document.getElementById('subject').value.trim();
       const body    = document.getElementById('body').value.trim();
       if (!subject || !body) {
-        setStatus('Please fill in both fields.', false);
+        const el = document.getElementById('status');
+        el.className = 'err';
+        el.textContent = 'Please fill in both fields.';
         return;
       }
       const btn = document.getElementById('btn-submit');
       btn.disabled = true;
       btn.textContent = 'Sending…';
-      api.postMessage('support:submit', { subject, body });
+      document.getElementById('status').textContent = '';
+      if (window.chrome && window.chrome.webview)
+        window.chrome.webview.postMessage({ type: 'support:submit', subject, body });
     });
 
-    window.onSubmitResult = function(ok) {
-      const btn = document.getElementById('btn-submit');
-      btn.disabled = false;
-      btn.textContent = 'Send Ticket';
-      if (ok) {
-        setStatus('✓ Ticket sent! We\'ll get back to you.', true);
-        document.getElementById('subject').value = '';
-        document.getElementById('body').value = '';
-      } else {
-        setStatus('✗ Failed to send. Check your connection and try again.', false);
-      }
-    };
-
-    function setStatus(msg, ok) {
-      const el = document.getElementById('status');
-      el.textContent = msg;
-      el.className = ok ? 'ok' : 'err';
-    }
+    // Request user ID on load
+    if (window.chrome && window.chrome.webview)
+      window.chrome.webview.postMessage({ type: 'support:getUserId' });
   </script>
 </body>
 </html>
+
