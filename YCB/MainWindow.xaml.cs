@@ -47,6 +47,7 @@ public partial class MainWindow : Window
     private readonly Dictionary<WebView2, DateTime> _navStartTimes = new();
     private CoreWebView2Environment? _webViewEnvironment;
     private CoreWebView2Environment? _incognitoWebViewEnvironment;
+    private string? _attachedImagePath;
     
     public MainWindow() : this(false, null) { }
 
@@ -1485,6 +1486,46 @@ public partial class MainWindow : Window
     protected override void OnSourceInitialized(EventArgs e)
     {
         base.OnSourceInitialized(e);
+        var source = (System.Windows.Interop.HwndSource)PresentationSource.FromVisual(this);
+        source.AddHook(WndProc);
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct POINT { public int x; public int y; }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MINMAXINFO
+    {
+        public POINT ptReserved, ptMaxSize, ptMaxPosition, ptMinTrackSize, ptMaxTrackSize;
+    }
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
+    private struct MONITORINFO
+    {
+        public int cbSize;
+        public System.Drawing.Rectangle rcMonitor;
+        public System.Drawing.Rectangle rcWork;
+        public uint dwFlags;
+    }
+    private const int WM_GETMINMAXINFO   = 0x0024;
+    private const int MONITOR_DEFAULTTONEAREST = 2;
+    [DllImport("user32.dll")] private static extern IntPtr MonitorFromWindow(IntPtr hwnd, int dwFlags);
+    [DllImport("user32.dll")] private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
+
+    private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        if (msg == WM_GETMINMAXINFO && _isFullscreen)
+        {
+            var mmi = Marshal.PtrToStructure<MINMAXINFO>(lParam);
+            var monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+            var info = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+            GetMonitorInfo(monitor, ref info);
+            mmi.ptMaxPosition.x = 0;
+            mmi.ptMaxPosition.y = 0;
+            mmi.ptMaxSize.x = info.rcMonitor.Width;
+            mmi.ptMaxSize.y = info.rcMonitor.Height;
+            Marshal.StructureToPtr(mmi, lParam, true);
+            handled = true;
+        }
+        return IntPtr.Zero;
     }
 
     private void BeginNativeDrag()
@@ -2134,6 +2175,27 @@ public partial class MainWindow : Window
         UrlPlaceholder.Visibility = string.IsNullOrEmpty(UrlBox.Text) ? Visibility.Visible : Visibility.Collapsed;
     }
     
+    private void AttachImage_Click(object sender, RoutedEventArgs e)
+    {
+        var dlg = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "Select an image",
+            Filter = "Image files|*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.webp|All files|*.*"
+        };
+        if (dlg.ShowDialog() == true)
+        {
+            _attachedImagePath = dlg.FileName;
+            ImageAttachName.Text = "📎 " + System.IO.Path.GetFileName(dlg.FileName);
+            ImageAttachIndicator.Visibility = Visibility.Visible;
+        }
+    }
+
+    private void RemoveAttachedImage_Click(object sender, RoutedEventArgs e)
+    {
+        _attachedImagePath = null;
+        ImageAttachIndicator.Visibility = Visibility.Collapsed;
+    }
+
     private void Copilot_Click(object sender, RoutedEventArgs e)
     {
         // Block Copilot in incognito mode unless setting enabled
@@ -2167,12 +2229,20 @@ public partial class MainWindow : Window
     private async void SendCopilot_Click(object sender, RoutedEventArgs e)
     {
         var message = CopilotInput.Text.Trim();
-        if (string.IsNullOrEmpty(message)) return;
+        if (string.IsNullOrEmpty(message) && _attachedImagePath == null) return;
         
-        AddCopilotMessage(message, true);
-        _chatHistory.Add(new ChatMessage { Role = "user", Content = message });
+        var displayMessage = message;
+        if (_attachedImagePath != null)
+            displayMessage = (string.IsNullOrEmpty(message) ? "" : message + "\n") + "📎 " + System.IO.Path.GetFileName(_attachedImagePath);
+        
+        AddCopilotMessage(string.IsNullOrEmpty(displayMessage) ? "📎 Image attached" : displayMessage, true);
+        _chatHistory.Add(new ChatMessage { Role = "user", Content = displayMessage });
         CopilotInput.Text = "";
         CopilotInput.IsEnabled = false;
+        
+        var imagePath = _attachedImagePath;
+        _attachedImagePath = null;
+        ImageAttachIndicator.Visibility = Visibility.Collapsed;
         
         // Get current URL
         var currentUrl = "";
@@ -2212,6 +2282,14 @@ public partial class MainWindow : Window
         }
         
         prompt += $"User: {message}";
+        
+        // If image is attached, prepend a view instruction
+        if (imagePath != null)
+        {
+            prompt = $"[The user has attached an image. View this image: {imagePath}]\n\n" + prompt;
+            if (string.IsNullOrEmpty(message))
+                prompt += "User: (see attached image)";
+        }
         
         // Create response message placeholder
         var responseBorder = new Border

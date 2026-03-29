@@ -305,25 +305,59 @@
                             <SolidColorBrush Color="#FFFFFF" Opacity="0.08"/>
                         </Border.BorderBrush>
                         <Border.BorderThickness>0,1,0,0</Border.BorderThickness>
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="Auto"/>
-                            </Grid.ColumnDefinitions>
-                            <Border Grid.Column="0" Background="#2a2b36" CornerRadius="20" 
-                                    BorderBrush="#3d3e4a" BorderThickness="1">
-                                <TextBox x:Name="CopilotInput" 
-                                         Background="Transparent" Foreground="#e8eaed" CaretBrush="#8ab4f8"
-                                         BorderThickness="0" Padding="14,9" FontSize="13"
-                                         VerticalContentAlignment="Center"
-                                         KeyDown="CopilotInput_KeyDown"/>
+                        <StackPanel>
+                            <!-- Image attachment indicator -->
+                            <Border x:Name="ImageAttachIndicator" Visibility="Collapsed"
+                                    Background="#2a2b36" CornerRadius="8" BorderBrush="#3d3e4a" BorderThickness="1"
+                                    Padding="8,4" Margin="0,0,0,6">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock x:Name="ImageAttachName" Grid.Column="0" Foreground="#8ab4f8"
+                                               FontSize="11" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                                    <Button Grid.Column="1" Click="RemoveAttachedImage_Click"
+                                            Style="{StaticResource IconBtnStyle}" Margin="4,0,0,0">
+                                        <Path Data="M1 1 L7 7 M7 1 L1 7" Stroke="#9aa0a6" StrokeThickness="1.5"
+                                              StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                              Width="8" Height="8" Stretch="Uniform"/>
+                                    </Button>
+                                </Grid>
                             </Border>
-                            <Button Grid.Column="1" Click="SendCopilot_Click" 
-                                    Style="{StaticResource SendBtnStyle}" Margin="8,0,0,0">
-                                <Path Data="M1 8 L14 2 L9 8 L14 14 Z" Fill="#111" 
-                                      Width="16" Height="16" Stretch="Uniform"/>
-                            </Button>
-                        </Grid>
+                            <!-- Input row -->
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <Border Grid.Column="0" Background="#2a2b36" CornerRadius="20"
+                                        BorderBrush="#3d3e4a" BorderThickness="1">
+                                    <TextBox x:Name="CopilotInput"
+                                             Background="Transparent" Foreground="#e8eaed" CaretBrush="#8ab4f8"
+                                             BorderThickness="0" Padding="14,9" FontSize="13"
+                                             VerticalContentAlignment="Center"
+                                             KeyDown="CopilotInput_KeyDown"/>
+                                </Border>
+                                <!-- Image attach button -->
+                                <Button Grid.Column="1" Click="AttachImage_Click"
+                                        Style="{StaticResource IconBtnStyle}" Margin="8,0,0,0" ToolTip="Attach image">
+                                    <Canvas Width="16" Height="16">
+                                        <Path Data="M1 5 L1 14 L15 14 L15 5 L11 5 L10 3 L6 3 L5 5 Z"
+                                              Stroke="#9aa0a6" StrokeThickness="1.2" Fill="Transparent"
+                                              StrokeLineJoin="Round"/>
+                                        <Ellipse Canvas.Left="5" Canvas.Top="7" Width="6" Height="6"
+                                                 Stroke="#9aa0a6" StrokeThickness="1.2" Fill="Transparent"/>
+                                    </Canvas>
+                                </Button>
+                                <Button Grid.Column="2" Click="SendCopilot_Click"
+                                        Style="{StaticResource SendBtnStyle}" Margin="4,0,0,0">
+                                    <Path Data="M1 8 L14 2 L9 8 L14 14 Z" Fill="#111"
+                                          Width="16" Height="16" Stretch="Uniform"/>
+                                </Button>
+                            </Grid>
+                        </StackPanel>
                     </Border>
                 </Grid>
             </Border>
