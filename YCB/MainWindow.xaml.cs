@@ -1006,8 +1006,7 @@ public partial class MainWindow : Window
         var pageName = url.Replace("ycb://", "").Replace("chrome://", "").ToLower();
         
         // Get the path to the renderer folder
-        var exePath = System.Reflection.Assembly.GetExecutingAssembly().Location;
-        var exeDir = IoPath.GetDirectoryName(exePath) ?? "";
+        var exeDir = System.AppContext.BaseDirectory;
         var rendererPath = IoPath.Combine(exeDir, "renderer");
         
         string htmlFile;
@@ -3652,7 +3651,8 @@ public partial class MainWindow : Window
     {
         try
         {
-            var exePath = System.Reflection.Assembly.GetExecutingAssembly().Location;
+            var exePath = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName
+                          ?? IoPath.Combine(System.AppContext.BaseDirectory, "YCB.exe");
             if (exePath.EndsWith(".dll"))
             {
                 exePath = exePath.Replace(".dll", ".exe");
