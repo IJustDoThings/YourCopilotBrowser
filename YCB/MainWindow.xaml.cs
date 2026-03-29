@@ -1416,25 +1416,83 @@ public partial class MainWindow : Window
                     }
                     break;
 
-                case "support:submit":
-                    if (sender is CoreWebView2 svw)
+                case "support:create":
+                    if (sender is CoreWebView2 scvw)
                     {
                         var subject = message.TryGetValue("subject", out var sj) ? sj.GetString() ?? "" : "";
-                        var body    = message.TryGetValue("body",    out var bd) ? bd.GetString() ?? "" : "";
+                        var msg     = message.TryGetValue("message", out var mg) ? mg.GetString() ?? "" : "";
                         var userId  = ErrorReporter.UserId ?? "unknown";
                         try
                         {
                             using var http = new System.Net.Http.HttpClient();
-                            var payload = JsonSerializer.Serialize(new { userId, subject, body });
+                            http.Timeout = TimeSpan.FromSeconds(10);
+                            var payload = JsonSerializer.Serialize(new { userId, subject, message = msg });
                             var content = new System.Net.Http.StringContent(payload, System.Text.Encoding.UTF8, "application/json");
                             var resp = await http.PostAsync("https://ycb.tomcreations.org/Support/Ticket/", content);
                             var statusCode = (int)resp.StatusCode;
-                            var ok = resp.IsSuccessStatusCode;
-                            await svw.ExecuteScriptAsync($"window.onSubmitResult && window.onSubmitResult({(ok ? "true" : "false")}, {statusCode})");
+                            if (resp.IsSuccessStatusCode)
+                            {
+                                var json = await resp.Content.ReadAsStringAsync();
+                                await scvw.ExecuteScriptAsync($"window.onTicketCreated && window.onTicketCreated({json}, {statusCode})");
+                            }
+                            else
+                            {
+                                await scvw.ExecuteScriptAsync($"window.onTicketError && window.onTicketError({statusCode})");
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            await scvw.ExecuteScriptAsync($"window.onTicketError && window.onTicketError(0, {JsonSerializer.Serialize(ex.Message)})");
+                        }
+                    }
+                    break;
+
+                case "support:reply":
+                    if (sender is CoreWebView2 srvw)
+                    {
+                        var ticketId = message.TryGetValue("ticketId", out var tid) ? tid.GetString() ?? "" : "";
+                        var replyMsg = message.TryGetValue("message",  out var rm)  ? rm.GetString()  ?? "" : "";
+                        var userId   = ErrorReporter.UserId ?? "unknown";
+                        try
+                        {
+                            using var http = new System.Net.Http.HttpClient();
+                            http.Timeout = TimeSpan.FromSeconds(10);
+                            var payload = JsonSerializer.Serialize(new { userId, message = replyMsg });
+                            var content = new System.Net.Http.StringContent(payload, System.Text.Encoding.UTF8, "application/json");
+                            var resp = await http.PostAsync($"https://ycb.tomcreations.org/Support/Ticket/{ticketId}/Reply/", content);
+                            var statusCode = (int)resp.StatusCode;
+                            await srvw.ExecuteScriptAsync($"window.onReplyResult && window.onReplyResult({(resp.IsSuccessStatusCode ? "true" : "false")}, {statusCode})");
                         }
                         catch
                         {
-                            await svw.ExecuteScriptAsync("window.onSubmitResult && window.onSubmitResult(false, 0)");
+                            await srvw.ExecuteScriptAsync("window.onReplyResult && window.onReplyResult(false, 0)");
+                        }
+                    }
+                    break;
+
+                case "support:poll":
+                    if (sender is CoreWebView2 spvw)
+                    {
+                        var ticketId = message.TryGetValue("ticketId", out var ptid) ? ptid.GetString() ?? "" : "";
+                        try
+                        {
+                            using var http = new System.Net.Http.HttpClient();
+                            http.Timeout = TimeSpan.FromSeconds(10);
+                            var resp = await http.GetAsync($"https://ycb.tomcreations.org/Support/Ticket/{ticketId}/");
+                            var statusCode = (int)resp.StatusCode;
+                            if (resp.IsSuccessStatusCode)
+                            {
+                                var json = await resp.Content.ReadAsStringAsync();
+                                await spvw.ExecuteScriptAsync($"window.onPollResult && window.onPollResult({json}, {statusCode})");
+                            }
+                            else
+                            {
+                                await spvw.ExecuteScriptAsync($"window.onPollResult && window.onPollResult(null, {statusCode})");
+                            }
+                        }
+                        catch
+                        {
+                            await spvw.ExecuteScriptAsync("window.onPollResult && window.onPollResult(null, 0)");
                         }
                     }
                     break;
