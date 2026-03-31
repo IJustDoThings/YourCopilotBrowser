@@ -4044,6 +4044,128 @@ public partial class MainWindow : Window
     try { return BLOCK_RE.test(url); } catch(e) { return false; }
   }
 
+  // Runtime hosts and heuristics — fetch a maintained host-list and apply heuristic matching
+  var __runtimeHosts = [];
+  var __heuristicsRe = /(?:ad|banner|sponsor|analytics|track(?:er)?|pixel|beacon|cookie|consent|adsense|adsbygoogle|doubleclick|googlesyndication|pagead|adservice|adserver|affiliat|offerwall|popad|cryptominer|coin|miner|xmr|monero|videoad)/i;
+
+  function runtimeMatches(url) {
+    try {
+      if (!url) return false;
+      for (var i=0;i<__runtimeHosts.length;i++) {
+        if (!__runtimeHosts[i]) continue;
+        if (url.indexOf(__runtimeHosts[i]) !== -1) return true;
+      }
+      return false;
+    } catch(e) { return false; }
+  }
+
+  // Enhanced isBlocked: BLOCK_RE OR runtime host list OR heuristic keywords in URL or inline script content
+  function isBlockedUrlOrContent(urlOrContent) {
+    try {
+      if (typeof urlOrContent !== 'string') urlOrContent = String(urlOrContent || '');
+      if (BLOCK_RE.test(urlOrContent)) return true;
+      if (runtimeMatches(urlOrContent)) return true;
+      if (__heuristicsRe.test(urlOrContent)) return true;
+      return false;
+    } catch(e) { return false; }
+  }
+
+  // Fetch runtime host list (best-effort, non-blocking)
+  try {
+    fetch('https://raw.githubusercontent.com/Turtlecute33/Toolz/master/src/d3host.txt').then(function(r){
+      if (!r.ok) return; return r.text();
+    }).then(function(txt){
+      if (!txt) return;
+      txt.split(/\r?\n/).forEach(function(line){
+        line = line.trim();
+        if (!line || line.indexOf('#')===0) return;
+        // lines like: 0.0.0.0 domain.tld or domain only
+        var parts = line.split(/\s+/);
+        var host = parts.length>1? parts[1] : parts[0];
+        if (host && host.indexOf('.')>-1) __runtimeHosts.push(host);
+      });
+    }).catch(function(){ /* ignore */ });
+  } catch(e) {}
+
+  // Replace original isBlockedUrl usage sites to use enhanced check
+  // (Helper used below: replace calls to isBlockedUrl with isBlockedUrlOrContent where appropriate)
+
+  // Block eval/new Function to prevent string-based ad injection
+  try {
+    window.eval = function() { throw new Error('eval blocked'); };
+    window.Function = function() { throw new Error('Function constructor blocked'); };
+  } catch(e) {}
+
+  // Block document.write of ad content or URLs with heuristics
+  try {
+    var _origDocWrite = document.write.bind(document);
+    document.write = function() {
+      try {
+        for (var i=0;i<arguments.length;i++) {
+          var s = String(arguments[i]||'');
+          if (isBlockedUrlOrContent(s)) return; // drop writes containing ad/tracker patterns
+        }
+      } catch(e) {}
+      return _origDocWrite.apply(null, arguments);
+    };
+  } catch(e) {}
+
+  // Intercept script insertion to block blocked src or suspicious inline content
+  try {
+    var _origAppend = Node.prototype.appendChild;
+    Node.prototype.appendChild = function(node) {
+      try {
+        if (node && node.tagName === 'SCRIPT') {
+          var src = node.src || '';
+          var txt = node.textContent || node.innerText || '';
+          if (isBlockedUrlOrContent(src) || isBlockedUrlOrContent(txt)) {
+            try { node.setAttribute('_blocked_by_ycb','1'); } catch(e) {}
+            return node; // silently ignore insertion (avoid breaking callers)
+          }
+        }
+      } catch(e) {}
+      return _origAppend.apply(this, arguments);
+    };
+    var _origInsertBefore = Node.prototype.insertBefore;
+    Node.prototype.insertBefore = function(newNode, refNode) {
+      try {
+        if (newNode && newNode.tagName === 'SCRIPT') {
+          var src2 = newNode.src || '';
+          var txt2 = newNode.textContent || newNode.innerText || '';
+          if (isBlockedUrlOrContent(src2) || isBlockedUrlOrContent(txt2)) {
+            try { newNode.setAttribute('_blocked_by_ycb','1'); } catch(e) {}
+            return newNode;
+          }
+        }
+      } catch(e) {}
+      return _origInsertBefore.apply(this, arguments);
+    };
+  } catch(e) {}
+
+  // Wrap setTimeout/setInterval to block string-based timers or suspicious function bodies
+  try {
+    var _origSetTimeout = window.setTimeout; window.setTimeout = function(cb, t) {
+      try { if (typeof cb === 'string' && isBlockedUrlOrContent(cb)) return 0; if (typeof cb === 'function' && __heuristicsRe.test(String(cb))) return 0; } catch(e) {}
+      return _origSetTimeout.apply(this, arguments);
+    };
+    var _origSetInterval = window.setInterval; window.setInterval = function(cb, t) {
+      try { if (typeof cb === 'string' && isBlockedUrlOrContent(cb)) return 0; if (typeof cb === 'function' && __heuristicsRe.test(String(cb))) return 0; } catch(e) {}
+      return _origSetInterval.apply(this, arguments);
+    };
+  } catch(e) {}
+
+  // Ensure XHR/fetch/image/script checks use enhanced function
+  // Replace earlier definitions by shadowing helper names used above in other overrides
+  isBlockedUrl = isBlockedUrlOrContent;
+
+  // Heuristic CSS to hide containers that look like ad blocks (more aggressive)
+  try {
+    var __moreCss = document.createElement('style');
+    __moreCss.textContent = '[class*="ad-"]{display:none!important} [class*="banner"]{display:none!important} [id*="ad_"]{display:none!important} [data-ad]{display:none!important} [data-ad-client]{display:none!important}';
+    document.documentElement.appendChild(__moreCss);
+  } catch(e) {}
+
+
   // Block XMLHttpRequest — abort blocked requests (causes onerror, not just silent drop)
   var _origOpen = XMLHttpRequest.prototype.open;
   XMLHttpRequest.prototype.open = function(method, url) {
