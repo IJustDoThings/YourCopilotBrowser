@@ -3276,14 +3276,13 @@ public partial class MainWindow : Window
 (function() {
   'use strict';
   var noop = function() { return false; };
-  // Allow override (for sites where ad blocking is disabled, real scripts will overwrite)
+  // Lock down globals so tracker scripts cannot override them
   function def(name, val) {
     try {
-      var _v = val;
       Object.defineProperty(window, name, {
-        get: function() { return _v; },
-        set: function(v) { _v = v; },
-        configurable: true
+        value: val,
+        writable: false,
+        configurable: false
       });
     } catch(e) {}
   }
@@ -3405,6 +3404,23 @@ public partial class MainWindow : Window
         foreach (var pattern in _adBlockDomains)
             webView.CoreWebView2.AddWebResourceRequestedFilter(pattern, CoreWebView2WebResourceContext.All);
 
+        // Path-based patterns for banner images served from first-party domains
+        var adImagePaths = new[]
+        {
+            "*://*/ads/*", "*://*/ad/*", "*://*/adv/*",
+            "*://*/banners/*", "*://*/banner/*",
+            "*://*/advertisements/*", "*://*/advertisement/*",
+            "*://*/adserver/*", "*://*/adimg/*", "*://*/adimages/*",
+            "*://*/sponsor/*", "*://*/sponsors/*",
+            "*://*ad-banner*", "*://*banner-ad*", "*://*adBanner*",
+        };
+        foreach (var p in adImagePaths)
+            webView.CoreWebView2.AddWebResourceRequestedFilter(p, CoreWebView2WebResourceContext.Image);
+
+        // Also block Flash/media ad resources at these paths
+        foreach (var p in adImagePaths)
+            webView.CoreWebView2.AddWebResourceRequestedFilter(p, CoreWebView2WebResourceContext.Media);
+
         webView.CoreWebView2.WebResourceRequested += (s, e) =>
         {
             if (!_settings.AdBlockerEnabled) return;
@@ -3509,11 +3525,12 @@ public partial class MainWindow : Window
   observer.observe(document.documentElement, { childList: true, subtree: true });
 
   // Hide images loaded from ad-related paths (banner image ads)
-  var AD_IMG_RE = /[/?=](ads?|advert|banner|bnr|sponsor|promo)[/?=.]|\/(ads?|banners?)\//i;
+  var AD_IMG_RE = /[/?=](ads?|advert(?:isement)?|banner|bnr|sponsor|promo|adserver|adimg)[/?=.]|\/(ads?|banners?|advertisements?|sponsors?|adserver|adimages?)\//i;
   function hideAdImages(root) {
     try {
-      root.querySelectorAll('img[src]').forEach(function(img) {
-        if (AD_IMG_RE.test(img.src)) { img.style.cssText += ';display:none!important'; }
+      root.querySelectorAll('img[src],img[data-src]').forEach(function(img) {
+        var src = img.src || img.getAttribute('data-src') || '';
+        if (AD_IMG_RE.test(src)) { img.style.cssText += ';display:none!important;visibility:hidden!important'; }
       });
     } catch(e) {}
   }
