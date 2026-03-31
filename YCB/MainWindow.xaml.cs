@@ -3229,9 +3229,11 @@ public partial class MainWindow : Window
         "*://mediavine.com/*",         "*://*.mediavine.com/*",
         // Trackers & analytics
         "*://google-analytics.com/*",  "*://*.google-analytics.com/*",
-        "*://analytics.google.com/*",
+        "*://analytics.google.com/*",  "*://click.googleanalytics.com/*",
+        "*://ssl.google-analytics.com/*",
         "*://connect.facebook.net/*",  "*://www.facebook.com/tr/*",
         "*://hotjar.com/*",            "*://*.hotjar.com/*",
+        "*://hotjar.io/*",             "*://*.hotjar.io/*",
         "*://mouseflow.com/*",         "*://*.mouseflow.com/*",
         "*://mixpanel.com/*",          "*://*.mixpanel.com/*",
         "*://segment.com/*",           "*://*.segment.io/*",
@@ -3268,15 +3270,39 @@ public partial class MainWindow : Window
         "*://cdn.rollbar.com/*",       "*://*.rollbar.com/*",
         "*://raygun.com/*",            "*://*.raygun.com/*",
         "*://az416426.vo.msecnd.net/*",
-        // Turtlecute adblock test domains
+        // Turtlecute adblock test domains — exact subdomains
         // Ads
         "*://adtago.s3.amazonaws.com/*", "*://analyticsengine.s3.amazonaws.com/*",
         "*://analytics.s3.amazonaws.com/*", "*://advice-ads.s3.amazonaws.com/*",
         "*://adcolony.com/*", "*://*.adcolony.com/*",
-        // Analytics
+        "*://ads30.adcolony.com/*", "*://adc3-launch.adcolony.com/*",
+        "*://events3alt.adcolony.com/*", "*://wd.adcolony.com/*",
+        "*://pagead2.googlesyndication.com/*", "*://afs.googlesyndication.com/*",
+        "*://adservice.google.com/*", "*://pagead2.googleadservices.com/*",
+        "*://stats.g.doubleclick.net/*", "*://ad.doubleclick.net/*",
+        "*://static.doubleclick.net/*", "*://m.doubleclick.net/*",
+        "*://mediavisor.doubleclick.net/*",
+        "*://static.media.net/*", "*://adservetx.media.net/*",
+        // Analytics — exact turtlecute subdomains
         "*://freshmarketer.com/*", "*://*.freshmarketer.com/*",
+        "*://claritybt.freshmarketer.com/*", "*://fwtracks.freshmarketer.com/*",
         "*://*.luckyorange.net/*", "*://stats.wp.com/*",
-        "*://app.getsentry.com/*",
+        "*://api.luckyorange.com/*", "*://realtime.luckyorange.com/*",
+        "*://cdn.luckyorange.com/*", "*://w1.luckyorange.com/*",
+        "*://upload.luckyorange.net/*", "*://cs.luckyorange.net/*",
+        "*://settings.luckyorange.net/*",
+        "*://adm.hotjar.com/*", "*://identify.hotjar.com/*",
+        "*://insights.hotjar.com/*", "*://script.hotjar.com/*",
+        "*://surveys.hotjar.com/*", "*://careers.hotjar.com/*",
+        "*://events.hotjar.io/*",
+        "*://cdn.mouseflow.com/*", "*://o2.mouseflow.com/*",
+        "*://gtm.mouseflow.com/*", "*://api.mouseflow.com/*",
+        "*://tools.mouseflow.com/*", "*://cdn-test.mouseflow.com/*",
+        "*://analytics.google.com/*", "*://click.googleanalytics.com/*",
+        "*://ssl.google-analytics.com/*",
+        "*://app.getsentry.com/*", "*://browser.sentry-cdn.com/*",
+        "*://notify.bugsnag.com/*", "*://sessions.bugsnag.com/*",
+        "*://api.bugsnag.com/*", "*://app.bugsnag.com/*",
         // FreshWorks full suite
         "*://freshworks.com/*", "*://*.freshworks.com/*",
         "*://freshdesk.com/*",  "*://*.freshdesk.com/*",
@@ -3399,10 +3425,15 @@ public partial class MainWindow : Window
   def('s_test_ads', undefined); def('s_test_pagead', undefined);
   def('s_test_analytics', undefined); def('s_test_tracker', undefined);
 
-  // Google Analytics / GTM
+  // Google Ads / Tag Manager
   def('ga', undefined); def('gtag', undefined); def('_gaq', undefined);
   def('dataLayer', undefined); def('GoogleAnalyticsObject', undefined);
   def('google_tag_manager', undefined); def('google_tag_data', undefined);
+  def('googletag', undefined); def('google_ad_client', undefined);
+  def('google_ad_slot', undefined); def('adsbygoogle', undefined);
+  def('_google_ad_width', undefined); def('_google_ad_height', undefined);
+  def('google_ad_format', undefined); def('google_ad_type', undefined);
+  def('google_page_url', undefined);
 
   // Facebook
   def('fbq', undefined); def('_fbq', undefined);
@@ -3466,6 +3497,30 @@ public partial class MainWindow : Window
   // Mouseflow / CrazyEgg session replay
   def('mouseflow', undefined); def('_mfq', undefined);
   def('CE_API', undefined);
+
+  // TikTok
+  def('ttq', undefined); def('TiktokAnalyticsObject', undefined);
+
+  // Twitter/X
+  def('twq', undefined); def('twttr', undefined);
+
+  // LinkedIn
+  def('_linkedin_data_partner_id', undefined); def('lintrk', undefined);
+
+  // Pinterest
+  def('pintrk', undefined);
+
+  // Reddit
+  def('rdt', undefined);
+
+  // Yandex Metrika
+  def('yaCounter', undefined);
+
+  // Taboola / Outbrain
+  def('_taboola', undefined); def('OBR', undefined);
+
+  // Criteo
+  def('Criteo', undefined); def('CriteoQ', undefined);
 
   // Chartbeat
   def('_sf_async_config', undefined); def('pSUPERFLY', undefined);
@@ -3531,7 +3586,7 @@ public partial class MainWindow : Window
   } catch(e) {}
 
   // Comprehensive block list regex - matches all major ad/tracker/social/OEM domains
-  var BLOCK_RE = /googlesyndication\.com|doubleclick\.net|googleadservices\.com|googletagmanager\.com|googleanalytics\.com|google-analytics\.com|adservice\.google\.|adcolony\.com|media\.net|hotjar\.(com|io)|mouseflow\.com|freshmarketer\.com|freshworks\.com|freshdesk\.com|freshchat\.com|wchat\.freshchat|luckyorange\.|stats\.wp\.com|bugsnag\.com|sentry-cdn\.com|getsentry\.com|sentry\.io|pixel\.facebook\.com|an\.facebook\.com|connect\.facebook\.(com|net)|ads-twitter\.com|ads-api\.twitter\.com|ads\.linkedin\.com|pointdrive\.linkedin\.com|ads\.pinterest\.com|log\.pinterest\.com|trk\.pinterest\.com|ct\.pinterest\.com|events\.reddit\.com|redditmedia\.com|alb\.reddit\.com|pixel\.reddit\.com|ads\.youtube\.com|tiktok\.(com|sg)|byteoversea\.com|ads\.yahoo\.com|analytics\.yahoo\.com|geo\.yahoo\.com|udcm\.yahoo\.com|ysm\.yahoo\.com|log\.fc\.yahoo\.com|gemini\.yahoo\.com|yahooinc\.com|appmetrica\.yandex|adfstat\.yandex|metrika\.yandex|mc\.yandex\.ru|offerwall\.yandex|adfox\.yandex|extmaps-api\.yandex|unityads\.unity3d\.com|realme\.com|realmemobile\.com|mistat\.xiaomi|ad\.xiaomi\.com|sdkconfig\.ad|tracking\.rus\.miui|oppomobile\.com|hicloud\.com|oneplus\.(cn|net)|samsungads\.com|smetrics\.samsung|nmetrics\.samsung|samsung-com\.112|samsunghealthcn|iadsdk\.apple\.com|metrics\.icloud\.com|metrics\.mzstatic\.com|api-adservices\.apple\.com|analytics-events\.apple\.com|newrelic\.com|nr-data\.net|rollbar\.com|raygun\.com|datadog|logrocket\.com|fullstory\.com|clarity\.ms|amplitude\.com|mixpanel\.com|segment\.(io|com)|heap\.io|heapanalytics|intercom\.(io|com)|crazyegg|inspectlet|clicky\.com|woopra\.com|chartbeat|scorecardresearch|comscore\.com|quantserve|adnxs\.com|amazon-adsystem\.com|pubmatic\.com|openx\.net|rubiconproject|casalemedia|adsrvr\.org|moatads|yieldmo|criteo\.com|taboola\.com|outbrain\.com|adroll\.com|adtago\.s3\.amazonaws|analyticsengine\.s3\.amazonaws|analytics\.s3\.amazonaws|advice-ads\.s3\.amazonaws|facebook\.com\/(tr|pixel)|\/pagead\.js|\/widget\/ads\.js|\/ads\.js\b|pagead2\.|adsbygoogle|advertising\.com|bidswitch\.net|contextweb\.com|sharethrough\.com|triplelift\.com|33across\.com|sovrn\.com|smartadserver\.com|teads\.(tv|com)|spotxchange\.com|spotx\.tv|undertone\.com|mediavine\.com|revcontent\.com|lijit\.com|adtech\.(com|de)|everesttech\.net|statcounter\.com|krxd\.net|quantcast\.com|adsymptotic\.com|serving-sys\.com|turn\.com|demdex\.net|bluekai\.com|exelator\.com|addthis\.com|sharethis\.com|disqus\.com\/count|livefyre\.com|apnxs\.com|adgrx\.com|lkqd\.net|freewheel\.tv|stickyadstv\.com|jwpltx\.com|jwpsrv\.com|advertising-api\.amazon|bat\.bing\.com|bat\.r\.msn\.com|c\.bing\.com\/c\b|snap\.licdn\.com|munchkin\.marketo|hs-analytics\.net|hsforms\.net|hscta\.net|hubspot\.com\/analytics|pardot\.com|marketo\.com|eloqua\.com|adsafeprotected\.com|doubleverify\.com|integral-assets\.com|optimizely\.com|mathtag\.com|hubspot\.com\/log|t\.myvisualiq\.net|insightexpressai\.com|surveymonkey\.com\/r\/ratecheck/i;
+  var BLOCK_RE = /googlesyndication\.com|doubleclick\.net|googleadservices\.com|googletagmanager\.com|googleanalytics\.com|google-analytics\.com|analytics\.google\.com|click\.googleanalytics\.com|adservice\.google\.|adcolony\.com|media\.net|hotjar\.(com|io)|mouseflow\.com|freshmarketer\.com|freshworks\.com|freshdesk\.com|freshchat\.com|wchat\.freshchat|luckyorange\.|stats\.wp\.com|bugsnag\.com|sentry-cdn\.com|getsentry\.com|sentry\.io|pixel\.facebook\.com|an\.facebook\.com|connect\.facebook\.(com|net)|ads-twitter\.com|ads-api\.twitter\.com|ads\.linkedin\.com|pointdrive\.linkedin\.com|ads\.pinterest\.com|log\.pinterest\.com|trk\.pinterest\.com|ct\.pinterest\.com|events\.reddit\.com|redditmedia\.com|alb\.reddit\.com|pixel\.reddit\.com|ads\.youtube\.com|tiktok\.(com|sg)|byteoversea\.com|ads\.yahoo\.com|analytics\.yahoo\.com|geo\.yahoo\.com|udcm\.yahoo\.com|ysm\.yahoo\.com|log\.fc\.yahoo\.com|gemini\.yahoo\.com|yahooinc\.com|appmetrica\.yandex|adfstat\.yandex|metrika\.yandex|mc\.yandex\.ru|offerwall\.yandex|adfox\.yandex|extmaps-api\.yandex|unityads\.unity3d\.com|realme\.com|realmemobile\.com|mistat\.xiaomi|ad\.xiaomi\.com|sdkconfig\.ad|tracking\.rus\.miui|oppomobile\.com|hicloud\.com|oneplus\.(cn|net)|samsungads\.com|smetrics\.samsung|nmetrics\.samsung|samsung-com\.112|samsunghealthcn|iadsdk\.apple\.com|metrics\.icloud\.com|metrics\.mzstatic\.com|api-adservices\.apple\.com|analytics-events\.apple\.com|newrelic\.com|nr-data\.net|rollbar\.com|raygun\.com|datadog|logrocket\.com|fullstory\.com|clarity\.ms|amplitude\.com|mixpanel\.com|segment\.(io|com)|heap\.io|heapanalytics|intercom\.(io|com)|crazyegg|inspectlet|clicky\.com|woopra\.com|chartbeat|scorecardresearch|comscore\.com|quantserve|adnxs\.com|amazon-adsystem\.com|pubmatic\.com|openx\.net|rubiconproject|casalemedia|adsrvr\.org|moatads|yieldmo|criteo\.com|taboola\.com|outbrain\.com|adroll\.com|adtago\.s3\.amazonaws|analyticsengine\.s3\.amazonaws|analytics\.s3\.amazonaws|advice-ads\.s3\.amazonaws|facebook\.com\/(tr|pixel)|\/pagead\.js|\/widget\/ads\.js|\/ads\.js\b|pagead2\.|adsbygoogle|advertising\.com|bidswitch\.net|contextweb\.com|sharethrough\.com|triplelift\.com|33across\.com|sovrn\.com|smartadserver\.com|teads\.(tv|com)|spotxchange\.com|spotx\.tv|undertone\.com|mediavine\.com|revcontent\.com|lijit\.com|adtech\.(com|de)|everesttech\.net|statcounter\.com|krxd\.net|quantcast\.com|adsymptotic\.com|serving-sys\.com|turn\.com|demdex\.net|bluekai\.com|exelator\.com|addthis\.com|sharethis\.com|disqus\.com\/count|livefyre\.com|apnxs\.com|adgrx\.com|lkqd\.net|freewheel\.tv|stickyadstv\.com|jwpltx\.com|jwpsrv\.com|advertising-api\.amazon|bat\.bing\.com|bat\.r\.msn\.com|c\.bing\.com\/c\b|snap\.licdn\.com|munchkin\.marketo|hs-analytics\.net|hsforms\.net|hscta\.net|hubspot\.com\/analytics|pardot\.com|marketo\.com|eloqua\.com|adsafeprotected\.com|doubleverify\.com|integral-assets\.com|optimizely\.com|mathtag\.com|hubspot\.com\/log|t\.myvisualiq\.net|insightexpressai\.com|surveymonkey\.com\/r\/ratecheck/i;
 
   function isBlockedUrl(url) {
     try { return BLOCK_RE.test(url); } catch(e) { return false; }
