@@ -1,12 +1,15 @@
 using System.Diagnostics;
 using System.IO;
 using System.IO.Pipes;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text;
 using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using Microsoft.Web.WebView2.Core;
+using Microsoft.Win32;
 
 namespace YCB;
 
@@ -23,7 +26,8 @@ public partial class App : Application
     // Watchdog state
     private static volatile int  _lastHeartbeatTick = 0;
     private static volatile bool _watchdogShown     = false;
-    private const  int           FreezeThresholdMs  = 8000;  // 8 s freeze = show diag
+    private static volatile bool _suspendWatchdog   = false;   // true while system is sleeping
+    private const  int           FreezeThresholdMs  = 12000;   // 12 s — generous to avoid false positives
 
     // ── Trace helper ──────────────────────────────────────────────────────────
     internal static void WriteTrace(string message)
@@ -55,41 +59,82 @@ public partial class App : Application
         WriteTrace($"CPU: {(Environment.Is64BitProcess ? "64-bit" : "32-bit")} process");
         WriteTrace($"Dir: {AppContext.BaseDirectory}");
 
-        // Global crash handlers
+        // Global crash handlers — log silently, never show a dialog to the user
         DispatcherUnhandledException += (s, ex) =>
         {
             ex.Handled = true;
             WriteTrace($"[CRASH] Dispatcher: {ex.Exception?.GetType().Name}: {ex.Exception?.Message}");
             ErrorReporter.Report("UnhandledException", ex.Exception?.Message ?? "Unknown dispatcher error", exception: ex.Exception);
-            ShowDiagnostics("Unhandled Error", ex.Exception);
+            // Log to errors.log but do NOT show a popup — most of these are harmless
+            // (WebView2 renderer hiccups, GPU context lost after sleep, cancelled tasks, etc.)
+            try
+            {
+                var sb = new StringBuilder();
+                sb.AppendLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Unhandled: {ex.Exception?.GetType().Name}");
+                sb.AppendLine(ex.Exception?.Message);
+                sb.AppendLine(ex.Exception?.StackTrace);
+                sb.AppendLine();
+                File.AppendAllText(Path.Combine(LogDir, "errors.log"), sb.ToString());
+            }
+            catch { }
         };
         AppDomain.CurrentDomain.UnhandledException += (s, ex) =>
         {
             var exc = ex.ExceptionObject as Exception;
             WriteTrace($"[CRASH] AppDomain: {exc?.GetType().Name}: {exc?.Message}");
             ErrorReporter.Report("FatalException", exc?.Message ?? "Unknown fatal error", exception: exc);
-            try { Dispatcher.Invoke(() => ShowDiagnostics("Fatal Error", exc)); }
-            catch { ShowDiagnosticsOnNewThread("Fatal Error", exc); }
+            // Log to errors.log — only show UI if the runtime is actually terminating
+            try
+            {
+                var sb = new StringBuilder();
+                sb.AppendLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Fatal: {exc?.GetType().Name}");
+                sb.AppendLine(exc?.Message);
+                sb.AppendLine(exc?.StackTrace);
+                sb.AppendLine();
+                File.AppendAllText(Path.Combine(LogDir, "errors.log"), sb.ToString());
+            }
+            catch { }
+            if (ex.IsTerminating)
+            {
+                try { Dispatcher.Invoke(() => ShowDiagnostics("Fatal Error", exc)); }
+                catch { ShowDiagnosticsOnNewThread("Fatal Error", exc); }
+            }
         };
 
         try
         {
             string? urlArg = e.Args.Length > 0 ? e.Args[0] : null;
 
+            // Handle --set-default: register YCB in Default Apps and open the settings deep-link
+            if (urlArg == "--set-default")
+            {
+                RegisterUrlHandler(); // ensure registration is current
+                OpenDefaultAppsForYCB();
+                Shutdown();
+                return;
+            }
+
             // Single-instance check
             _mutex = new Mutex(true, MutexName, out bool isFirst);
             if (!isFirst)
             {
                 WriteTrace("Another instance running — forwarding and exiting");
-                try
+                // Retry up to 5 times in case pipe server is briefly between connections
+                bool sent = false;
+                for (int attempt = 0; attempt < 5 && !sent; attempt++)
                 {
-                    using var client = new NamedPipeClientStream(".", PipeName, PipeDirection.Out);
-                    client.Connect(2000);
-                    using var writer = new StreamWriter(client);
-                    writer.WriteLine(urlArg ?? "__focus__");
-                    writer.Flush();
+                    try
+                    {
+                        using var client = new NamedPipeClientStream(".", PipeName, PipeDirection.Out);
+                        client.Connect(1000);
+                        using var writer = new StreamWriter(client);
+                        writer.WriteLine(urlArg ?? "__focus__");
+                        writer.Flush();
+                        sent = true;
+                    }
+                    catch { Thread.Sleep(300); }
                 }
-                catch { }
+                WriteTrace(sent ? "URL forwarded OK" : "Failed to forward URL after 5 attempts");
                 Shutdown();
                 return;
             }
@@ -111,6 +156,9 @@ public partial class App : Application
 
             WriteTrace("Starting pipe server");
             StartPipeServer();
+
+            // Silently re-register URL handler on every launch (keeps exe path current)
+            RegisterUrlHandler();
 
             WriteTrace("Creating MainWindow");
             var window = new MainWindow(startupUrl: urlArg);
@@ -140,6 +188,25 @@ public partial class App : Application
     {
         _lastHeartbeatTick = Environment.TickCount;
 
+        // Reset heartbeat on power resume (sleep/hibernate wake) so the watchdog
+        // doesn't fire just because the device was suspended.
+        // Also suspend the watchdog when going TO sleep so it can't fire during the transition.
+        SystemEvents.PowerModeChanged += (_, e) =>
+        {
+            if (e.Mode == PowerModes.Suspend)
+            {
+                _suspendWatchdog = true;
+                WriteTrace("[WATCHDOG] System suspending — watchdog paused");
+            }
+            else if (e.Mode == PowerModes.Resume)
+            {
+                _lastHeartbeatTick = Environment.TickCount;
+                _watchdogShown = false;
+                _suspendWatchdog = false;
+                WriteTrace("[WATCHDOG] System resumed from sleep — heartbeat reset, watchdog resumed");
+            }
+        };
+
         // DispatcherTimer runs on the UI thread — it keeps the heartbeat alive
         var heartbeat = new System.Windows.Threading.DispatcherTimer
         {
@@ -156,21 +223,48 @@ public partial class App : Application
         var watchThread = new Thread(() =>
         {
             // Give the app a moment to fully start before monitoring
-            Thread.Sleep(3000);
+            Thread.Sleep(5000);
             WriteTrace("Watchdog monitoring started");
 
             while (true)
             {
                 Thread.Sleep(1000);
 
+                // Don't check during sleep/resume — the heartbeat timer doesn't tick
+                if (_suspendWatchdog)
+                {
+                    _lastHeartbeatTick = Environment.TickCount;
+                    continue;
+                }
+
                 int elapsed = Environment.TickCount - _lastHeartbeatTick;
+
+                // Negative elapsed = TickCount wrapped or clock skew from sleep — reset
+                if (elapsed < 0)
+                {
+                    _lastHeartbeatTick = Environment.TickCount;
+                    continue;
+                }
+
                 if (elapsed > FreezeThresholdMs && !_watchdogShown)
                 {
                     _watchdogShown = true;
-                    WriteTrace($"[WATCHDOG] UI thread frozen for {elapsed}ms — showing diagnostics");
+                    WriteTrace($"[WATCHDOG] UI thread frozen for {elapsed}ms — logging silently");
                     ErrorReporter.Report("WatchdogFreeze", $"UI thread unresponsive for {elapsed / 1000} seconds.");
-                    ShowDiagnosticsOnNewThread("App Frozen",
-                        new Exception($"The UI thread has not responded for {elapsed / 1000} seconds."));
+                    // Log full diagnostics to errors.log — NO popup shown to the user
+                    try
+                    {
+                        var sb = new System.Text.StringBuilder();
+                        sb.AppendLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] YCB Browser — UI Frozen");
+                        sb.AppendLine($"UI thread unresponsive for {elapsed / 1000} seconds.");
+                        sb.AppendLine($"OS: {Environment.OSVersion}");
+                        try { sb.AppendLine($"Memory: {Process.GetCurrentProcess().WorkingSet64 / 1024 / 1024} MB"); } catch { }
+                        sb.AppendLine($"Full log: {LogFile}");
+                        sb.AppendLine();
+                        File.AppendAllText(Path.Combine(LogDir, "errors.log"), sb.ToString());
+                    }
+                    catch { }
+                    // Silent — no popup. The user doesn't need to see this.
                 }
                 else if (elapsed < 2000 && _watchdogShown)
                 {
@@ -191,6 +285,59 @@ public partial class App : Application
         var t = new Thread(() =>
         {
             ShowDiagnostics(title, ex);
+        });
+        t.SetApartmentState(ApartmentState.STA);
+        t.IsBackground = true;
+        t.Start();
+    }
+
+    // Shows a small friendly notice instead of the scary diagnostic window
+    private static void ShowFriendlyFreezeNotice()
+    {
+        var t = new Thread(() =>
+        {
+            var logDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "YCB-Browser");
+            var msg = new TextBlock
+            {
+                Text = "⚠  We have detected an issue. If there isn't one going on, disregard this — but if there is, view:\nhttps://ycb.tomcreations.org/auth/login?next=/support",
+                FontFamily = new System.Windows.Media.FontFamily("Segoe UI"),
+                FontSize = 13,
+                Foreground = System.Windows.Media.Brushes.White,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(20, 20, 20, 10)
+            };
+
+            var btn = new Button
+            {
+                Content = "OK",
+                Width = 80,
+                Height = 32,
+                Margin = new Thickness(0, 0, 20, 16),
+                HorizontalAlignment = HorizontalAlignment.Right,
+                Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(30, 115, 232)),
+                Foreground = System.Windows.Media.Brushes.White,
+                BorderThickness = new Thickness(0),
+                FontSize = 13
+            };
+
+            var stack = new StackPanel();
+            stack.Children.Add(msg);
+            stack.Children.Add(btn);
+
+            var win = new Window
+            {
+                Title = "YCB Browser — Issue Detected",
+                Content = stack,
+                Width = 420,
+                Height = 210,
+                ResizeMode = ResizeMode.NoResize,
+                Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(30, 30, 30)),
+                WindowStartupLocation = WindowStartupLocation.CenterScreen,
+                Topmost = true
+            };
+
+            btn.Click += (_, _) => win.Close();
+            win.ShowDialog();
         });
         t.SetApartmentState(ApartmentState.STA);
         t.IsBackground = true;
@@ -308,6 +455,98 @@ public partial class App : Application
 
     internal static void ShowError(string title, Exception? ex) => ShowDiagnostics(title, ex);
 
+    // Opens Windows Default Apps scrolled directly to the YCB Browser entry
+    internal static void OpenDefaultAppsForYCB()
+    {
+        // URL-encode the space: "YCB%20Browser" — this deep-links to YCB's protocol page
+        try
+        {
+            Process.Start(new ProcessStartInfo("ms-settings:defaultapps?registeredAppMachine=YCB%20Browser")
+                { UseShellExecute = true });
+            return;
+        }
+        catch { }
+        // Fallback: explorer.exe
+        try
+        {
+            Process.Start(new ProcessStartInfo("explorer.exe",
+                "ms-settings:defaultapps?registeredAppMachine=YCB%20Browser")
+                { UseShellExecute = false });
+            return;
+        }
+        catch { }
+        // Last fallback: generic page
+        try
+        {
+            Process.Start(new ProcessStartInfo("explorer.exe", "ms-settings:defaultapps")
+                { UseShellExecute = false });
+        }
+        catch { }
+    }
+
+    // ── URL protocol handler registration ────────────────────────────────────
+    private static void RegisterUrlHandler()
+    {
+        try
+        {
+            var exePath = Process.GetCurrentProcess().MainModule?.FileName
+                          ?? System.IO.Path.Combine(AppContext.BaseDirectory, "YCB.exe");
+            if (exePath.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+                exePath = exePath[..^4] + ".exe";
+            var cmd = $"\"{exePath}\" \"%1\"";
+
+            // ProgID registrations (HKCU — no admin needed, kept current every launch)
+            var progIds = new (string key, string name, string value)[]
+            {
+                (@"HKEY_CURRENT_USER\SOFTWARE\Classes\YCBUrl",                          "",             "YCB Browser URL"),
+                (@"HKEY_CURRENT_USER\SOFTWARE\Classes\YCBUrl",                          "URL Protocol", ""),
+                (@"HKEY_CURRENT_USER\SOFTWARE\Classes\YCBUrl\DefaultIcon",              "",             $"{exePath},0"),
+                (@"HKEY_CURRENT_USER\SOFTWARE\Classes\YCBUrl\shell\open\command",       "",             cmd),
+                (@"HKEY_CURRENT_USER\SOFTWARE\Classes\YCBHtml",                         "",             "YCB Browser HTML Document"),
+                (@"HKEY_CURRENT_USER\SOFTWARE\Classes\YCBHtml\DefaultIcon",             "",             $"{exePath},0"),
+                (@"HKEY_CURRENT_USER\SOFTWARE\Classes\YCBHtml\shell\open\command",      "",             cmd),
+            };
+            foreach (var (key, name, value) in progIds)
+                try { Microsoft.Win32.Registry.SetValue(key, name, value); } catch { }
+
+            // Remove any stale HKCU RegisteredApplications/Capabilities that cause a duplicate entry.
+            // The installer writes these under HKLM which is the single authoritative source.
+            try
+            {
+                using var ra = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
+                    @"SOFTWARE\RegisteredApplications", writable: true);
+                ra?.DeleteValue("YCB", throwOnMissingValue: false);
+                ra?.DeleteValue("YCB Browser", throwOnMissingValue: false);
+            }
+            catch { }
+            try { Microsoft.Win32.Registry.CurrentUser.DeleteSubKeyTree(
+                @"SOFTWARE\Clients\StartMenuInternet\YCB Browser", throwOnMissingSubKey: false); }
+            catch { }
+
+            // Update HKLM StartMenuInternet exe paths (requires the install to exist; silently skipped if no admin)
+            try
+            {
+                using var smiKey = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(
+                    @"SOFTWARE\Clients\StartMenuInternet\YCB Browser", writable: true);
+                if (smiKey != null)
+                {
+                    // shell\open\command — this is what Windows launches when you click the app in Default Apps
+                    Microsoft.Win32.Registry.SetValue(
+                        @"HKEY_LOCAL_MACHINE\SOFTWARE\Clients\StartMenuInternet\YCB Browser\shell\open\command",
+                        "", $"\"{exePath}\"");
+                    Microsoft.Win32.Registry.SetValue(
+                        @"HKEY_LOCAL_MACHINE\SOFTWARE\Clients\StartMenuInternet\YCB Browser\DefaultIcon",
+                        "", $"{exePath},0");
+                    Microsoft.Win32.Registry.SetValue(
+                        @"HKEY_LOCAL_MACHINE\SOFTWARE\Clients\StartMenuInternet\YCB Browser\Capabilities",
+                        "ApplicationIcon", $"{exePath},0");
+                }
+            }
+            catch { /* no admin — HKLM paths stay as installer set them */ }
+        }
+        catch { }
+    }
+
     // ── Single-instance pipe server ───────────────────────────────────────────
     private void StartPipeServer()
     {
@@ -315,12 +554,31 @@ public partial class App : Application
         {
             while (true)
             {
+                NamedPipeServerStream? server = null;
                 try
                 {
-                    using var server = new NamedPipeServerStream(PipeName, PipeDirection.In);
+                    // Allow any user/elevation level to connect — fixes "Access denied"
+                    // when the first instance is elevated and the second is not (or vice versa)
+                    var security = new PipeSecurity();
+                    security.AddAccessRule(new PipeAccessRule(
+                        new SecurityIdentifier(WellKnownSidType.WorldSid, null),
+                        PipeAccessRights.ReadWrite,
+                        AccessControlType.Allow));
+
+                    server = NamedPipeServerStreamAcl.Create(
+                        PipeName, PipeDirection.In,
+                        maxNumberOfServerInstances: 4,
+                        transmissionMode: PipeTransmissionMode.Byte,
+                        options: PipeOptions.Asynchronous,
+                        inBufferSize: 4096,
+                        outBufferSize: 0,
+                        pipeSecurity: security);
                     server.WaitForConnection();
                     using var reader = new StreamReader(server);
                     string? msg = reader.ReadLine();
+                    server.Dispose();
+                    server = null;
+
                     if (msg != null)
                     {
                         Dispatcher.Invoke(() =>
@@ -333,10 +591,30 @@ public partial class App : Application
                         });
                     }
                 }
-                catch { Thread.Sleep(500); }
+                catch
+                {
+                    server?.Dispose();
+                    Thread.Sleep(200);
+                }
             }
         });
         thread.IsBackground = true;
         thread.Start();
     }
-}
+}
+
+// ── COM interfaces for setting default browser ────────────────────────────
+[System.Runtime.InteropServices.ComImport]
+[System.Runtime.InteropServices.Guid("1F76A169-F994-40AC-8FC8-0959E8874710")]
+[System.Runtime.InteropServices.InterfaceType(System.Runtime.InteropServices.ComInterfaceType.InterfaceIsIUnknown)]
+interface IApplicationAssociationRegistrationUI
+{
+    void LaunchAdvancedAssociationUI(
+        [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.LPWStr)]
+        string pszAppRegName);
+}
+
+[System.Runtime.InteropServices.ComImport]
+[System.Runtime.InteropServices.Guid("1968106D-F3B5-44CF-890E-116FCAA518D2")]
+[System.Runtime.InteropServices.ClassInterface(System.Runtime.InteropServices.ClassInterfaceType.None)]
+class ApplicationAssociationRegistrationUICoClass { }

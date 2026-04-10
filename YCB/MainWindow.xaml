@@ -22,54 +22,51 @@
             <RowDefinition x:Name="DownloadShelfRow" Height="0"/>
         </Grid.RowDefinitions>
         
-        <!-- Tab Strip -->
+        <!-- Tab Strip: outer grid locks window controls at right, inner grid handles tabs+drag -->
         <Grid Grid.Row="0" x:Name="TabStrip" Background="#202124" MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="Auto"/>  <!-- Tabs (only as wide as needed) -->
-                <ColumnDefinition Width="Auto"/>  <!-- New tab button -->
-                <ColumnDefinition Width="*"/>     <!-- Drag area fills all remaining space -->
-                <ColumnDefinition Width="Auto"/>  <!-- Window controls -->
+                <ColumnDefinition Width="*"/>    <!-- TabsArea: fills everything left of window controls -->
+                <ColumnDefinition Width="Auto"/> <!-- Window controls: always pinned right -->
             </Grid.ColumnDefinitions>
             
-            <!-- Tabs Container: padding-left 4px, align flex-end, max-width calc(100%-200px) -->
-            <ScrollViewer x:Name="TabsScroller" Grid.Column="0" 
-                          HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled"
-                          Margin="4,4,0,0" VerticalAlignment="Bottom">
-                <StackPanel x:Name="TabsPanel" Orientation="Horizontal"/>
-            </ScrollViewer>
-            
-            <!-- New Tab Button: 26x26, border-radius 50%, margin 0 2px 3px 2px -->
-            <Button x:Name="NewTabBtn" Click="AddTab_Click" Grid.Column="1"
-                    Width="26" Height="26" Margin="2,0,2,3" VerticalAlignment="Bottom"
-                    Style="{StaticResource NewTabBtnStyle}" ToolTip="New tab">
-                <!-- SVG: width=12 height=12 viewBox 0 0 12 12 -->
-                <Path Data="M6 1 L6 11 M1 6 L11 6" 
-                      Stroke="#9aa0a6" StrokeThickness="1.5" 
-                      StrokeStartLineCap="Round" StrokeEndLineCap="Round"
-                      Width="12" Height="12" Stretch="None"/>
-            </Button>
-            
-            <!-- Drag Area: flex:1 min-width:16px -->
-            <Border x:Name="DragArea" Grid.Column="2" Background="#01000000" MinWidth="16"
-                    MouseLeftButtonDown="TitleBar_MouseLeftButtonDown"/>
-            
-            <!-- Window Controls: height 36px, no border-radius -->
-            <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Top">
-                <!-- Minimize: 46x36 -->
-                <Button x:Name="MinBtn" Click="Minimize_Click" Style="{StaticResource WinBtnStyle}">
-                    <!-- SVG: width=10 height=1 rect -->
-                    <Rectangle Width="10" Height="1.5" Fill="#9aa0a6"/>
+            <!-- Inner grid: tabs | new-tab btn | drag -->
+            <Grid x:Name="TabsArea" Grid.Column="0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>              <!-- TabsScroller: auto, capped by MaxWidth in C# -->
+                    <ColumnDefinition Width="Auto"/>              <!-- New tab button -->
+                    <ColumnDefinition Width="*" MinWidth="60"/>   <!-- Drag area: always ≥60px -->
+                </Grid.ColumnDefinitions>
+                
+                <ScrollViewer x:Name="TabsScroller" Grid.Column="0"
+                              HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled"
+                              Margin="4,4,0,0" VerticalAlignment="Bottom">
+                    <StackPanel x:Name="TabsPanel" Orientation="Horizontal"/>
+                </ScrollViewer>
+                
+                <Button x:Name="NewTabBtn" Click="AddTab_Click" Grid.Column="1"
+                        Width="26" Height="26" Margin="2,0,2,3" VerticalAlignment="Bottom"
+                        Style="{StaticResource NewTabBtnStyle}" ToolTip="New tab">
+                    <Path x:Name="NewTabIcon" Data="M6 1 L6 11 M1 6 L11 6"
+                          Stroke="#9aa0a6" StrokeThickness="1.5"
+                          StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                          Width="12" Height="12" Stretch="None"/>
                 </Button>
-                <!-- Maximize: 46x36 -->
+                
+                <Border x:Name="DragArea" Grid.Column="2" Background="#01000000"
+                        MouseLeftButtonDown="TitleBar_MouseLeftButtonDown"/>
+            </Grid>
+            
+            <!-- Window Controls: always at right in outer Col 1 — tabs can never push these away -->
+            <StackPanel x:Name="WinControls" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top">
+                <Button x:Name="MinBtn" Click="Minimize_Click" Style="{StaticResource WinBtnStyle}">
+                    <Rectangle x:Name="MinIcon" Width="10" Height="1.5" Fill="#9aa0a6"/>
+                </Button>
                 <Button x:Name="MaxRestoreBtn" Click="Maximize_Click" Style="{StaticResource WinBtnStyle}">
-                    <!-- SVG: 10x10 rect stroke 1.5 -->
-                    <Rectangle x:Name="MaxIcon" Width="8.5" Height="8.5" 
+                    <Rectangle x:Name="MaxIcon" Width="8.5" Height="8.5"
                                Stroke="#9aa0a6" StrokeThickness="1.5" Fill="Transparent"/>
                 </Button>
-                <!-- Close: 46x36, red on hover -->
                 <Button x:Name="CloseBtn" Click="Close_Click" Style="{StaticResource CloseWinBtnStyle}">
-                    <!-- SVG: 10x10 X -->
-                    <Path Data="M1 1 L9 9 M9 1 L1 9" 
+                    <Path x:Name="CloseIcon" Data="M1 1 L9 9 M9 1 L1 9"
                           Stroke="#9aa0a6" StrokeThickness="1.5"
                           StrokeStartLineCap="Round" StrokeEndLineCap="Round"
                           Width="10" Height="10" Stretch="None"/>
@@ -89,14 +86,14 @@
             <StackPanel Grid.Column="0" Orientation="Horizontal" Margin="6,0,0,0">
                 <Button x:Name="BackBtn" Click="Back_Click" Style="{StaticResource NavBtnStyle}" 
                         ToolTip="Back" IsEnabled="False">
-                    <Path Data="M12 4 L7 10 L12 16" 
+                    <Path x:Name="BackIcon" Data="M12 4 L7 10 L12 16" 
                           Stroke="#9aa0a6" StrokeThickness="1.8"
                           StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
                           Width="20" Height="20" Stretch="Uniform"/>
                 </Button>
                 <Button x:Name="ForwardBtn" Click="Forward_Click" Style="{StaticResource NavBtnStyle}" 
                         ToolTip="Forward" IsEnabled="False">
-                    <Path Data="M8 4 L13 10 L8 16" 
+                    <Path x:Name="ForwardIcon" Data="M8 4 L13 10 L8 16" 
                           Stroke="#9aa0a6" StrokeThickness="1.8"
                           StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
                           Width="20" Height="20" Stretch="Uniform"/>
@@ -104,9 +101,9 @@
                 <Button x:Name="RefreshBtn" Click="Refresh_Click" Style="{StaticResource NavBtnStyle}" 
                         ToolTip="Reload page">
                     <Canvas Width="18" Height="18">
-                        <Path Data="M15 9 A6 6 0 1 1 3 9" 
+                        <Path x:Name="RefreshArc" Data="M15 9 A6 6 0 1 1 3 9" 
                               Stroke="#9aa0a6" StrokeThickness="1.8" StrokeStartLineCap="Round" Fill="Transparent"/>
-                        <Path Data="M15 5 L15 9 L11 9" 
+                        <Path x:Name="RefreshArrow" Data="M15 5 L15 9 L11 9" 
                               Stroke="#9aa0a6" StrokeThickness="1.8" 
                               StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/>
                     </Canvas>
@@ -184,26 +181,45 @@
                 <Button x:Name="CopilotBtn" Click="Copilot_Click" Style="{StaticResource NavBtnStyle}" 
                         ToolTip="Open Copilot">
                     <Canvas Width="20" Height="20">
-                        <Ellipse Canvas.Left="5" Canvas.Top="3.33" Width="10" Height="10" 
+                        <Ellipse x:Name="CopilotHead" Canvas.Left="5" Canvas.Top="3.33" Width="10" Height="10" 
                                  Stroke="#9aa0a6" StrokeThickness="1.33" Fill="Transparent"/>
-                        <Ellipse Canvas.Left="6.67" Canvas.Top="6.25" Width="2.5" Height="2.5" Fill="#9aa0a6"/>
-                        <Ellipse Canvas.Left="10.83" Canvas.Top="6.25" Width="2.5" Height="2.5" Fill="#9aa0a6"/>
-                        <Path Canvas.Left="0" Canvas.Top="0" 
+                        <Ellipse x:Name="CopilotEyeL" Canvas.Left="6.67" Canvas.Top="6.25" Width="2.5" Height="2.5" Fill="#9aa0a6"/>
+                        <Ellipse x:Name="CopilotEyeR" Canvas.Left="10.83" Canvas.Top="6.25" Width="2.5" Height="2.5" Fill="#9aa0a6"/>
+                        <Path x:Name="CopilotMouth" Canvas.Left="0" Canvas.Top="0" 
                               Data="M7.5 10.42 Q10 12.08 12.5 10.42"
                               Stroke="#9aa0a6" StrokeThickness="1" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
-                        <Path Canvas.Left="0" Canvas.Top="0"
+                        <Path x:Name="CopilotBody" Canvas.Left="0" Canvas.Top="0"
                               Data="M6.67 13.33 Q3.33 15 3.33 16.67 L16.67 16.67 Q16.67 15 13.33 13.33"
                               Stroke="#9aa0a6" StrokeThickness="1.17" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
                     </Canvas>
                 </Button>
                 
+                <!-- Incognito Indicator (shown only in incognito mode) -->
+                <Border x:Name="IncognitoPill" Visibility="Collapsed" 
+                        Background="#2a2b2f" CornerRadius="14" Padding="10,0,12,0" 
+                        Margin="2,9,2,9" VerticalAlignment="Center">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <Canvas Width="14" Height="14" Margin="0,0,6,0" VerticalAlignment="Center">
+                            <Ellipse Canvas.Left="2" Canvas.Top="7.5" Width="4.5" Height="4.5" 
+                                     Stroke="#9aa0a6" StrokeThickness="1.3" Fill="Transparent"/>
+                            <Ellipse Canvas.Left="7.5" Canvas.Top="7.5" Width="4.5" Height="4.5" 
+                                     Stroke="#9aa0a6" StrokeThickness="1.3" Fill="Transparent"/>
+                            <Line X1="1" Y1="4" X2="13" Y2="4" Stroke="#9aa0a6" StrokeThickness="1.3" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                            <Line X1="0" Y1="9.75" X2="2" Y2="9.75" Stroke="#9aa0a6" StrokeThickness="1.3" StrokeStartLineCap="Round"/>
+                            <Line X1="12" Y1="9.75" X2="14" Y2="9.75" Stroke="#9aa0a6" StrokeThickness="1.3" StrokeEndLineCap="Round"/>
+                        </Canvas>
+                        <TextBlock Text="Incognito" Foreground="#9aa0a6" FontSize="12" 
+                                   VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Border>
+                
                 <!-- Menu Button (3 dots) -->
                 <Button x:Name="MenuBtn" Click="Menu_Click" Style="{StaticResource NavBtnStyle}" 
                         ToolTip="Customize and control YCB">
                     <Canvas Width="4" Height="18">
-                        <Ellipse Canvas.Left="0.5" Canvas.Top="0.5" Width="3" Height="3" Fill="#9aa0a6"/>
-                        <Ellipse Canvas.Left="0.5" Canvas.Top="7.5" Width="3" Height="3" Fill="#9aa0a6"/>
-                        <Ellipse Canvas.Left="0.5" Canvas.Top="14.5" Width="3" Height="3" Fill="#9aa0a6"/>
+                        <Ellipse x:Name="MenuDot1" Canvas.Left="0.5" Canvas.Top="0.5" Width="3" Height="3" Fill="#9aa0a6"/>
+                        <Ellipse x:Name="MenuDot2" Canvas.Left="0.5" Canvas.Top="7.5" Width="3" Height="3" Fill="#9aa0a6"/>
+                        <Ellipse x:Name="MenuDot3" Canvas.Left="0.5" Canvas.Top="14.5" Width="3" Height="3" Fill="#9aa0a6"/>
                     </Canvas>
                 </Button>
             </StackPanel>
@@ -217,26 +233,9 @@
             </ScrollViewer>
         </Border>
         
-        <!-- INCOGNITO BAR - shown only when in incognito mode -->
-        <Border x:Name="IncognitoBar" Grid.Row="3" Background="#1a1b26" Visibility="Collapsed"
-                Padding="16,8">
-            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
-                <!-- Incognito Icon -->
-                <Canvas Width="16" Height="16" Margin="0,0,8,0">
-                    <Ellipse Canvas.Left="3" Canvas.Top="9" Width="5" Height="5" 
-                             Stroke="#9aa0a6" StrokeThickness="1.5" Fill="Transparent"/>
-                    <Ellipse Canvas.Left="8" Canvas.Top="9" Width="5" Height="5" 
-                             Stroke="#9aa0a6" StrokeThickness="1.5" Fill="Transparent"/>
-                    <Line X1="8" Y1="11.5" X2="8" Y2="11.5" Stroke="#9aa0a6" StrokeThickness="2"/>
-                    <Line X1="0" Y1="11.5" X2="3" Y2="11.5" Stroke="#9aa0a6" StrokeThickness="1.5" StrokeStartLineCap="Round"/>
-                    <Line X1="13" Y1="11.5" X2="16" Y2="11.5" Stroke="#9aa0a6" StrokeThickness="1.5" StrokeEndLineCap="Round"/>
-                    <Line X1="2" Y1="5" X2="14" Y2="5" Stroke="#9aa0a6" StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
-                </Canvas>
-                <TextBlock Text="Incognito" Foreground="#e8eaed" FontWeight="SemiBold" FontSize="13" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                <TextBlock x:Name="IncognitoDetail" Text="History, cookies and site data won't be saved. AI is disabled." 
-                           Foreground="#9aa0a6" FontSize="13" VerticalAlignment="Center"/>
-            </StackPanel>
-        </Border>
+        <!-- INCOGNITO BAR - removed; indicator is now in toolbar -->
+        <Border x:Name="IncognitoBar" Grid.Row="3" Visibility="Collapsed"/>
+        
         
         <!-- MAIN CONTENT AREA -->
         <Grid Grid.Row="4">
@@ -263,7 +262,7 @@
                     </Grid.RowDefinitions>
                     
                     <!-- Header: padding 14px 16px 12px -->
-                    <Border Grid.Row="0" Padding="16,14,16,12">
+                    <Border x:Name="CopilotHeaderBorder" Grid.Row="0" Padding="16,14,16,12">
                         <Border.Background>
                             <SolidColorBrush Color="#FFFFFF" Opacity="0.02"/>
                         </Border.Background>
@@ -291,8 +290,8 @@
                             </Canvas>
                             
                             <StackPanel Grid.Column="1" Margin="10,0,0,0">
-                                <TextBlock Text="GitHub Copilot" Foreground="#e8eaed" FontSize="14" FontWeight="SemiBold"/>
-                                <TextBlock Text="Your AI browser assistant" Foreground="#9aa0a6" FontSize="11"/>
+                                <TextBlock x:Name="CopilotTitleText" Text="Copilot" Foreground="#e8eaed" FontSize="14" FontWeight="SemiBold"/>
+                                <TextBlock x:Name="CopilotSubtitleText" Text="Ask me anything" Foreground="#9aa0a6" FontSize="11"/>
                             </StackPanel>
                             
                             <!-- Close button: 28x28 rounded 6px -->
@@ -312,7 +311,7 @@
                     </ScrollViewer>
                     
                     <!-- Input Area -->
-                    <Border Grid.Row="2" Padding="12,10">
+                    <Border x:Name="CopilotInputAreaBorder" Grid.Row="2" Padding="12,10">
                         <Border.Background>
                             <SolidColorBrush Color="#FFFFFF" Opacity="0.02"/>
                         </Border.Background>
@@ -385,7 +384,7 @@
                                     </Popup>
                                 </Grid>
 
-                                <Border Grid.Column="1" Background="#2a2b36" CornerRadius="20"
+                                <Border x:Name="CopilotInputFieldBorder" Grid.Column="1" Background="#2a2b36" CornerRadius="20"
                                         BorderBrush="#3d3e4a" BorderThickness="1">
                                     <TextBox x:Name="CopilotInput"
                                              Background="Transparent" Foreground="#e8eaed" CaretBrush="#8ab4f8"
@@ -435,7 +434,7 @@
         <Popup x:Name="MenuPopup" StaysOpen="False" Placement="Bottom" 
                PlacementTarget="{Binding ElementName=MenuBtn}" 
                AllowsTransparency="True" HorizontalOffset="-180">
-            <Border Background="#2d2e31" CornerRadius="6" Padding="0,6" MinWidth="220">
+            <Border x:Name="MenuPopupBorder" Background="#2d2e31" CornerRadius="6" Padding="0,6" MinWidth="220">
                 <Border.BorderBrush>
                     <SolidColorBrush Color="#FFFFFF" Opacity="0.07"/>
                 </Border.BorderBrush>
@@ -469,6 +468,9 @@
                     </Border>
                     <Button Click="MenuSettings_Click" Style="{StaticResource MenuItemStyle}">
                         <TextBlock Text="Settings"/>
+                    </Button>
+                    <Button Click="MenuBookmarks_Click" Style="{StaticResource MenuItemStyle}">
+                        <TextBlock Text="Bookmarks"/>
                     </Button>
                     <Button Click="MenuHistory_Click" Style="{StaticResource MenuItemStyle}">
                         <Grid Width="184">
@@ -530,13 +532,76 @@
             </Border>
         </Popup>
 
+        <!-- BOOKMARKS POPUP -->
+        <Popup x:Name="BookmarksPopup" StaysOpen="False" Placement="Bottom"
+               PlacementTarget="{Binding ElementName=MenuBtn}"
+               AllowsTransparency="True" HorizontalOffset="-180">
+            <Border Background="#2d2e31" CornerRadius="6" Padding="14,12" MinWidth="300" MaxWidth="360">
+                <Border.BorderBrush>
+                    <SolidColorBrush Color="#FFFFFF" Opacity="0.07"/>
+                </Border.BorderBrush>
+                <Border.BorderThickness>1</Border.BorderThickness>
+                <Border.Effect>
+                    <DropShadowEffect BlurRadius="24" Opacity="0.6" ShadowDepth="6" Color="#000000"/>
+                </Border.Effect>
+                <StackPanel>
+                    <!-- Bookmark this page -->
+                    <TextBlock Text="Bookmark this page" FontSize="12" FontWeight="SemiBold"
+                               Foreground="#9aa0a6" Margin="0,0,0,8"/>
+                    <TextBox x:Name="BookmarkNameBox"
+                             Background="#3c3d41" Foreground="#e8eaed" BorderThickness="1"
+                             Padding="8,6" Margin="0,0,0,6" FontSize="13"
+                             CaretBrush="#e8eaed">
+                        <TextBox.BorderBrush>
+                            <SolidColorBrush Color="#FFFFFF" Opacity="0.15"/>
+                        </TextBox.BorderBrush>
+                        <TextBox.Resources>
+                            <Style TargetType="Border">
+                                <Setter Property="CornerRadius" Value="5"/>
+                            </Style>
+                        </TextBox.Resources>
+                    </TextBox>
+                    <Button x:Name="BookmarkSaveBtn" Click="BookmarkSaveBtn_Click"
+                            Background="#1a73e8" Foreground="White" BorderThickness="0"
+                            Padding="0,8" FontSize="13" Cursor="Hand" HorizontalContentAlignment="Center">
+                        <Button.Resources>
+                            <Style TargetType="Border">
+                                <Setter Property="CornerRadius" Value="5"/>
+                            </Style>
+                        </Button.Resources>
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border Background="{TemplateBinding Background}" CornerRadius="5"
+                                        Padding="{TemplateBinding Padding}">
+                                    <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Border>
+                            </ControlTemplate>
+                        </Button.Template>
+                        <TextBlock Text="Save bookmark" FontSize="13"/>
+                    </Button>
+                    <!-- Divider -->
+                    <Border Height="1" Margin="0,12,0,8">
+                        <Border.Background>
+                            <SolidColorBrush Color="#FFFFFF" Opacity="0.08"/>
+                        </Border.Background>
+                    </Border>
+                    <TextBlock Text="Saved bookmarks" FontSize="12" FontWeight="SemiBold"
+                               Foreground="#9aa0a6" Margin="0,0,0,6"/>
+                    <!-- Bookmarks list -->
+                    <ScrollViewer MaxHeight="260" VerticalScrollBarVisibility="Auto">
+                        <StackPanel x:Name="BookmarksList"/>
+                    </ScrollViewer>
+                </StackPanel>
+            </Border>
+        </Popup>
+
         <!-- OMNIBAR SUGGESTIONS POPUP -->
         <Popup x:Name="SuggestPopup" StaysOpen="False" Placement="Bottom"
                PlacementTarget="{Binding ElementName=OmniboxBorder}"
                AllowsTransparency="True" PopupAnimation="Fade"
                VerticalOffset="4"
                Width="{Binding ActualWidth, ElementName=OmniboxBorder}">
-            <Border Background="#2d2e31" CornerRadius="0,0,8,8" Padding="0,4">
+            <Border x:Name="SuggestBorder" Background="#2d2e31" CornerRadius="0,0,8,8" Padding="0,4">
                 <Border.BorderBrush>
                     <SolidColorBrush Color="#FFFFFF" Opacity="0.08"/>
                 </Border.BorderBrush>
@@ -592,8 +657,8 @@
                                     </Canvas>
                                 </Viewbox>
                                 <StackPanel Grid.Column="1" Margin="6,0,0,0" VerticalAlignment="Center">
-                                    <TextBlock Text="{Binding Primary}" FontSize="13" Foreground="#e8eaed" TextTrimming="CharacterEllipsis"/>
-                                    <TextBlock Text="{Binding Secondary}" FontSize="11" Foreground="#9aa0a6" TextTrimming="CharacterEllipsis"
+                                    <TextBlock Text="{Binding Primary}" FontSize="13" Foreground="{Binding PrimaryColor}" TextTrimming="CharacterEllipsis"/>
+                                    <TextBlock Text="{Binding Secondary}" FontSize="11" Foreground="{Binding SecondaryColor}" TextTrimming="CharacterEllipsis"
                                                Visibility="{Binding SecondaryVisibility}"/>
                                 </StackPanel>
                             </Grid>

@@ -10,7 +10,13 @@
       --bg: #1e1f22; --sidebar: #27282c; --card: #2d2e32;
       --card2: #33343a; --text: #e8eaed; --text2: #9aa0a6;
       --accent: #8ab4f8; --green: #81c995; --border: rgba(255,255,255,0.08);
-      --red: #f28b82;
+      --red: #f28b82; --row-hover: rgba(255,255,255,0.04);
+    }
+    html.light {
+      --bg: #ffffff; --sidebar: #f8f9fa; --card: #ffffff;
+      --card2: #f1f3f4; --text: #202124; --text2: #5f6368;
+      --accent: #1a73e8; --green: #188038; --border: rgba(0,0,0,0.1);
+      --red: #d93025; --row-hover: rgba(0,0,0,0.03);
     }
     html, body { height: 100%; background: var(--bg); color: var(--text); font-family: -apple-system,'Segoe UI',Roboto,Arial,sans-serif; font-size: 13px; }
     body { display: flex; overflow: hidden; }
@@ -38,8 +44,8 @@
       color: var(--text2); font-size: 13px; margin-bottom: 2px;
       transition: background 0.12s, color 0.12s; text-decoration: none;
     }
-    .nav-item:hover { background: rgba(255,255,255,0.06); color: var(--text); }
-    .nav-item.active { background: rgba(138,180,248,0.12); color: var(--accent); }
+    .nav-item:hover { background: var(--row-hover); color: var(--text); }
+    .nav-item.active { background: rgba(26,115,232,0.1); color: var(--accent); }
     .nav-icon { width: 16px; text-align: center; flex-shrink: 0; font-size: 14px; }
 
     /* Main */
@@ -209,9 +215,25 @@
         </div>
       </div>
     </div>
+    <div class="section">
+      <div class="section-label">Services</div>
+      <div class="card">
+        <div class="row">
+          <div class="row-left">
+            <div class="row-title">Email provider</div>
+            <div class="row-desc">Shown as a quick link on the new tab page</div>
+          </div>
+          <select class="sel" id="email-provider-select">
+            <option value="gmail">Gmail</option>
+            <option value="outlook">Outlook</option>
+            <option value="yahoo">Yahoo Mail</option>
+            <option value="proton">Proton Mail</option>
+            <option value="icloud">iCloud Mail</option>
+          </select>
+        </div>
+      </div>
+    </div>
   </div>
-
-  <!-- Search engine -->
   <div id="section-search" style="display:none">
     <div class="page-title">Search engine</div>
     <div class="page-sub">Choose your default search engine for the address bar</div>
@@ -281,6 +303,22 @@
         </label>
       </div>
     </div>
+    <div class="section" id="home-page-section">
+      <div class="section-label">Home page</div>
+      <div class="card">
+        <div class="row">
+          <div class="row-left">
+            <div class="row-title">Home page URL</div>
+            <div class="row-desc">Opened when you click the Home button or on startup</div>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <input type="text" id="home-page-input" class="sel" style="min-width:220px"
+                   placeholder="ycb://newtab or https://example.com" value="ycb://newtab"/>
+            <button class="btn btn-primary" id="home-page-save">Save</button>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- YCB -->
@@ -346,18 +384,6 @@
   <div id="section-beta" style="display:none">
     <div class="page-title">Beta Features</div>
     <div class="page-sub">Experimental features — may change or be removed</div>
-    <div class="section">
-      <div class="section-label">Quick Download</div>
-      <div class="card">
-        <div class="row">
-          <div>
-            <div class="row-title">Quick Download</div>
-            <div class="row-desc">Detect download links on any page. Click the ⬇ toolbar button or press <kbd style="background:rgba(255,255,255,0.08);border:1px solid var(--border);border-radius:3px;padding:1px 5px;font-size:11px">Ctrl+Shift+D</kbd></div>
-          </div>
-          <button class="toggle" id="toggle-quick-download"></button>
-        </div>
-      </div>
-    </div>
     <div class="section">
       <div class="section-label">Ad Blocker</div>
       <div class="card">
@@ -460,6 +486,10 @@
 <div id="toast">✓ Saved</div>
 
 <script>
+  // ── Apply light/dark theme on load ───────────────────────────────────────
+  const currentThemeOnLoad = load('browser_theme', 'dark');
+  if (currentThemeOnLoad === 'light') document.documentElement.classList.add('light');
+
   // ── Navigation ────────────────────────────────────────────────────────────
   const sections = ['appearance','search','default','startup','ycb','privacy','beta','about'];
   const navItems = document.querySelectorAll('.nav-item');
@@ -526,6 +556,22 @@
     r.addEventListener('change', () => { save('startup_mode', r.value); showToast('Startup: ' + r.value); });
   });
 
+  // Home page
+  const homeInput = document.getElementById('home-page-input');
+  const homePageSave = document.getElementById('home-page-save');
+  if (homeInput) homeInput.value = load('home_page', 'ycb://newtab');
+  if (homePageSave) homePageSave.addEventListener('click', () => {
+    let v = homeInput ? homeInput.value.trim() : '';
+    if (!v) v = 'ycb://newtab';
+    if (v !== 'ycb://newtab' && !/^https?:\/\//i.test(v)) v = 'https://' + v;
+    save('home_page', v);
+    if (homeInput) homeInput.value = v;
+    showToast('Home page saved');
+  });
+  if (homeInput) homeInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && homePageSave) homePageSave.click();
+  });
+
   // ── YCB Model ─────────────────────────────────────────────────────────────
   const modelSel = document.getElementById('model-select');
   modelSel.value = load('ycb_model', 'gpt-5-mini');
@@ -570,9 +616,8 @@
   }
 
   document.getElementById('btn-set-default').addEventListener('click', () => {
-    console.log('__browser__:' + JSON.stringify({type: 'setDefault'}));
-    setDefaultStatus(true);
-    showToast('Set as default browser');
+    window.chrome.webview.postMessage(JSON.stringify({type: 'setDefault'}));
+    showToast('Opening Default Apps settings…');
   });
 
   // ── Auth / Copilot info ───────────────────────────────────────────────────
@@ -600,7 +645,17 @@
   themeSel.addEventListener('change', () => {
     save('browser_theme', themeSel.value);
     themeDesc.textContent = 'Currently using ' + themeSel.value + ' mode';
+    if (themeSel.value === 'light') document.documentElement.classList.add('light');
+    else document.documentElement.classList.remove('light');
     showToast('Theme changed to ' + themeSel.value);
+  });
+
+  // ── Email provider ────────────────────────────────────────────────────────
+  const emailSel = document.getElementById('email-provider-select');
+  emailSel.value = load('email_provider', 'gmail');
+  emailSel.addEventListener('change', () => {
+    save('email_provider', emailSel.value);
+    showToast('Email provider: ' + emailSel.options[emailSel.selectedIndex].text);
   });
 
   // ── Telemetry toggle ──────────────────────────────────────────────────────
@@ -623,18 +678,6 @@
     save('telemetry_enabled', on ? 'true' : 'false');
     showToast(on ? 'Diagnostic logging enabled' : 'Diagnostic logging disabled');
   });
-
-  // ── Quick Download beta toggle ────────────────────────────────────────────
-  const qdToggle = document.getElementById('toggle-quick-download');
-  if (qdToggle) {
-    qdToggle.classList.toggle('on', load('quick_download_enabled', 'off') === 'on');
-    qdToggle.addEventListener('click', () => {
-      const on = !qdToggle.classList.contains('on');
-      qdToggle.classList.toggle('on', on);
-      save('quick_download_enabled', on ? 'on' : 'off');
-      showToast(on ? 'Quick Download enabled — toolbar button added' : 'Quick Download disabled');
-    });
-  }
 
   // ── Ad Blocker beta toggle ────────────────────────────────────────────────
   const adBlockToggle = document.getElementById('toggle-ad-blocker');
@@ -717,19 +760,29 @@
     if (data.ai_enabled !== undefined) {
       localStorage.setItem('ai_enabled', data.ai_enabled);
     }
-    // quick_download_enabled
-    if (data.quick_download_enabled !== undefined && qdToggle) {
-      const on = data.quick_download_enabled === 'on';
-      qdToggle.classList.toggle('on', on);
-      localStorage.setItem('quick_download_enabled', data.quick_download_enabled);
-    }
     // ad_blocker_enabled
     if (data.ad_blocker_enabled !== undefined && adBlockToggle) {
       const on = data.ad_blocker_enabled === 'on';
       adBlockToggle.classList.toggle('on', on);
       localStorage.setItem('ad_blocker_enabled', data.ad_blocker_enabled);
     }
-
+    // home_page
+    if (data.home_page !== undefined) {
+      const homeInput = document.getElementById('home-page-input');
+      if (homeInput) homeInput.value = data.home_page;
+      localStorage.setItem('home_page', data.home_page);
+    }
+    // email_provider
+    if (data.email_provider !== undefined) {
+      const ep = document.getElementById('email-provider-select');
+      if (ep) ep.value = data.email_provider;
+      localStorage.setItem('email_provider', data.email_provider);
+    }
+    // browser_theme also updates html class
+    if (data.browser_theme !== undefined) {
+      if (data.browser_theme === 'light') document.documentElement.classList.add('light');
+      else document.documentElement.classList.remove('light');
+    }
   };
 
   // Request user ID from C# as soon as the page is ready

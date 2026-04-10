@@ -211,11 +211,9 @@
     document.getElementById('search').addEventListener('input', applyFilter);
 
     document.getElementById('btn-clear').addEventListener('click', () => {
-      if (confirm('Clear all browsing history?')) {
-        ycbAPI.clearHistory();
-        allEntries = [];
-        renderList([]);
-      }
+      ycbAPI.clearHistory();
+      allEntries = [];
+      renderList([]);
     });
 
     // Request history on load

@@ -10,14 +10,17 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Windows;
+using System.Windows.Shell;
 using Microsoft.Win32;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
+using System.Windows.Interop;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.Wpf;
+using System.Windows.Media.Animation;
 using WpfPath = System.Windows.Shapes.Path;
 using IoPath = System.IO.Path;
 
@@ -30,10 +33,17 @@ public partial class MainWindow : Window
     private bool _isDarkMode = true;
     private bool _copilotVisible = false;
     private bool _isFullscreen = false;
+    // Rapid-close: while mouse is over the tab strip, don't resize tabs (Chrome behaviour)
+    private bool _tabStripMouseOver = false;
+    private bool _tabsClosedWhileOver = false;
     private HashSet<string> _adBlockDisabledSites = new(StringComparer.OrdinalIgnoreCase);
     private readonly string _userDataFolder;
     private readonly string _incognitoUserDataFolder;
     private readonly string _settingsPath;
+    // When "Start fresh" is chosen, track which tab was the startup tab so its URL isn't
+    // saved as a "last tab" (prevents the restore prompt appearing again next session).
+    private BrowserTab? _freshStartTab = null;
+    private string?     _freshStartTabInitialUrl = null;
     private readonly string _historyPath;
     private readonly string _downloadsPath;
     private readonly string _bookmarksPath;
@@ -56,26 +66,12 @@ public partial class MainWindow : Window
     private string? _attachedImagePath;
     private double _savedLeft, _savedTop, _savedWidth, _savedHeight;
     private WindowState _savedWindowState;
+    private bool _manuallyMaximized = false;
+    private DateTime _historyClearedAt = DateTime.MinValue;
     private CancellationTokenSource? _suggestCts;
     private System.Windows.Threading.DispatcherTimer? _suggestCloseTimer;
     private bool _userEditingUrl = false;
-    private static Process? _dlServerProcess;
-    private readonly Dictionary<WebView2, CancellationTokenSource> _qdScanCts = new();
-    private readonly Dictionary<WebView2, bool> _qdDownloadGoBack = new();
     private readonly Dictionary<WebView2, string> _lastRealPageUrl = new(); // for learning
-
-    // Rolling learn-log sent with every quickdownload request so the server can train
-    private static readonly List<object> _learnLog = new();
-    private static readonly object _learnLogLock = new();
-    private static void AddLearnEntry(string pageUrl, string downloadUrl)
-    {
-        lock (_learnLogLock)
-        {
-            _learnLog.Add(new { pageUrl, downloadUrl, ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() });
-            if (_learnLog.Count > 20) _learnLog.RemoveAt(0);
-        }
-    }
-    private static object[] GetLearnLog() { lock (_learnLogLock) { return _learnLog.ToArray(); } }
     
     public MainWindow() : this(false, null) { }
 
@@ -99,6 +95,7 @@ public partial class MainWindow : Window
         _permissionsPath = IoPath.Combine(_userDataFolder, "permissions.json");
         
         Directory.CreateDirectory(_userDataFolder);
+        EnsureRendererExtracted();
         if (_isIncognito)
         {
             Directory.CreateDirectory(_incognitoUserDataFolder);
@@ -111,12 +108,48 @@ public partial class MainWindow : Window
         StateChanged += MainWindow_StateChanged;
         KeyDown += MainWindow_KeyDown;
         SizeChanged += (_, _) => UpdateTabWidths();
+        // Track mouse over the ENTIRE tab strip — only resize on leave if tabs were actually closed
+        Loaded += (_, _) =>
+        {
+            TabStrip.MouseEnter += (s, e) => _tabStripMouseOver = true;
+            TabStrip.MouseLeave += (s, e) =>
+            {
+                _tabStripMouseOver = false;
+                if (_tabsClosedWhileOver)
+                {
+                    _tabsClosedWhileOver = false;
+                    UpdateTabWidths(); // resize now that cursor has left after rapid-close
+                }
+            };
+        };
         if (_isIncognito)
         {
             Closed += IncognitoWindow_Closed;
         }
     }
     
+    // Returns the renderer folder path (in AppData, extracted from embedded resources)
+    private string RendererPath => IoPath.Combine(_userDataFolder, "renderer");
+
+    private void EnsureRendererExtracted()
+    {
+        var outDir = RendererPath;
+        Directory.CreateDirectory(outDir);
+        var asm = System.Reflection.Assembly.GetExecutingAssembly();
+        foreach (var name in asm.GetManifestResourceNames())
+        {
+            if (!name.StartsWith("renderer/")) continue;
+            // name like "renderer/newtab.html" or "renderer/subdir/file.js"
+            var relative = name.Substring("renderer/".Length).Replace('/', IoPath.DirectorySeparatorChar);
+            var destPath = IoPath.Combine(outDir, relative);
+            Directory.CreateDirectory(IoPath.GetDirectoryName(destPath)!);
+            using var src = asm.GetManifestResourceStream(name)!;
+            // Always overwrite so updates ship on next run
+            using var dst = File.Open(destPath, FileMode.Create, FileAccess.Write);
+            src.CopyTo(dst);
+        }
+    }
+
     private void IncognitoWindow_Closed(object? sender, EventArgs e)
     {
         // Clean up incognito temp data
@@ -137,14 +170,7 @@ public partial class MainWindow : Window
         if (_isIncognito)
         {
             Title = "YCB (Incognito)";
-            IncognitoBarRow.Height = new GridLength(32);
-            IncognitoBar.Visibility = Visibility.Visible;
-            
-            // Update incognito detail text based on AI setting
-            bool aiEnabledInIncognito = _settings.IncognitoAIEnabled ?? false;
-            IncognitoDetail.Text = aiEnabledInIncognito 
-                ? "History, cookies and site data won't be saved."
-                : "History, cookies and site data won't be saved. AI is disabled.";
+            IncognitoPill.Visibility = Visibility.Visible;
         }
         
         ApplyTheme();
@@ -158,10 +184,6 @@ public partial class MainWindow : Window
             CopilotSidebar.Visibility = Visibility.Collapsed;
             SidebarColumn.Width = new GridLength(0);
         }
-
-        // Quick Download: start local server if enabled
-        if (_settings.QuickDownloadEnabled)
-            StartDlServer();
 
         // Restore tabs from last session or create new tab (incognito always starts fresh)
         if (!_isIncognito && _settings.StartupMode == "continue" && _settings.LastTabs?.Count > 0)
@@ -200,8 +222,23 @@ public partial class MainWindow : Window
     // Called by App.xaml.cs pipe server when another instance sends a URL
     public async void OpenUrl(string url)
     {
+        // Normalize bare URLs (e.g. "google.com" → "https://google.com")
+        if (!string.IsNullOrWhiteSpace(url) &&
+            !url.StartsWith("ycb://") &&
+            !url.StartsWith("http://") &&
+            !url.StartsWith("https://") &&
+            !url.StartsWith("file://") &&
+            !url.StartsWith("about:"))
+        {
+            url = "https://" + url;
+        }
+
         BringToFront();
-        await CreateTab(url);
+        try { await CreateTab(url); }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[OpenUrl] Failed to open '{url}': {ex.Message}");
+        }
     }
 
     public void BringToFront()
@@ -227,32 +264,48 @@ public partial class MainWindow : Window
     
     private void MainWindow_StateChanged(object? sender, EventArgs e)
     {
-        // Update maximize/restore button icon- using rectangles for proper rendering
         if (WindowState == WindowState.Maximized)
         {
-            // Show restore icon (two overlapping rectangles)
-            var canvas = new Canvas { Width = 10, Height = 10 };
-            var rect1 = new Rectangle { Width = 7, Height = 7, Stroke = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#9aa0a6")!), StrokeThickness = 1.2, Fill = Brushes.Transparent };
-            var rect2 = new Rectangle { Width = 7, Height = 7, Stroke = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#9aa0a6")!), StrokeThickness = 1.2, Fill = Brushes.Transparent };
-            Canvas.SetLeft(rect1, 0);
-            Canvas.SetTop(rect1, 3);
-            Canvas.SetLeft(rect2, 3);
-            Canvas.SetTop(rect2, 0);
-            canvas.Children.Add(rect1);
-            canvas.Children.Add(rect2);
-            MaxRestoreBtn.Content = canvas;
+            // System maximize (Aero snap, Win+Up) — cancel it and use manual maximize
+            WindowState = WindowState.Normal;
+            ManualMaximize();
         }
-        else
+        else if (!_isFullscreen && !_manuallyMaximized)
         {
-            // Show maximize icon (single rectangle)
-            MaxRestoreBtn.Content = new Rectangle 
-            { 
-                Width = 8.5, Height = 8.5, 
-                Stroke = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#9aa0a6")!), 
-                StrokeThickness = 1.5, 
-                Fill = Brushes.Transparent 
-            };
+            WindowChrome.SetWindowChrome(this, new WindowChrome
+            {
+                CaptionHeight         = 0,
+                ResizeBorderThickness = new Thickness(5),
+                GlassFrameThickness   = new Thickness(-1),
+                CornerRadius          = new CornerRadius(0)
+            });
+            ShowMaximizeIcon();
         }
+    }
+
+    private void ShowRestoreIcon()
+    {
+        var iconColor = _isDarkMode ? "#9aa0a6" : "#5f6368";
+        var canvas = new Canvas { Width = 10, Height = 10 };
+        var rect1 = new Rectangle { Width = 7, Height = 7, Stroke = new SolidColorBrush((Color)ColorConverter.ConvertFromString(iconColor)!), StrokeThickness = 1.2, Fill = Brushes.Transparent };
+        var rect2 = new Rectangle { Width = 7, Height = 7, Stroke = new SolidColorBrush((Color)ColorConverter.ConvertFromString(iconColor)!), StrokeThickness = 1.2, Fill = Brushes.Transparent };
+        Canvas.SetLeft(rect1, 0); Canvas.SetTop(rect1, 3);
+        Canvas.SetLeft(rect2, 3); Canvas.SetTop(rect2, 0);
+        canvas.Children.Add(rect1);
+        canvas.Children.Add(rect2);
+        MaxRestoreBtn.Content = canvas;
+    }
+
+    private void ShowMaximizeIcon()
+    {
+        var iconColor = _isDarkMode ? "#9aa0a6" : "#5f6368";
+        MaxRestoreBtn.Content = new Rectangle
+        {
+            Width = 8.5, Height = 8.5,
+            Stroke = new SolidColorBrush((Color)ColorConverter.ConvertFromString(iconColor)!),
+            StrokeThickness = 1.5,
+            Fill = Brushes.Transparent
+        };
     }
     
     private void MainWindow_KeyDown(object sender, KeyEventArgs e)
@@ -352,30 +405,68 @@ public partial class MainWindow : Window
     private void ToggleFullscreen()
     {
         _isFullscreen = !_isFullscreen;
+        var hwnd = new WindowInteropHelper(this).Handle;
 
         if (_isFullscreen)
         {
             _savedWindowState = WindowState;
+            _savedLeft = Left; _savedTop = Top; _savedWidth = Width; _savedHeight = Height;
 
+            // Hide browser UI
             TabStrip.Visibility = Visibility.Collapsed;
             Toolbar.Visibility  = Visibility.Collapsed;
             MainGrid.RowDefinitions[0].Height = new GridLength(0);
             MainGrid.RowDefinitions[1].Height = new GridLength(0);
 
-            // WM_GETMINMAXINFO will constrain Maximized to full monitor (no taskbar gap, no overflow)
-            if (WindowState == WindowState.Maximized) WindowState = WindowState.Normal;
-            WindowState = WindowState.Maximized;
+            // Capture exact monitor rect in physical pixels BEFORE style changes
+            var monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+            var mi = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+            GetMonitorInfo(monitor, ref mi);
+            int fsX = mi.rcMonitor.Left,  fsY = mi.rcMonitor.Top;
+            int fsW = mi.rcMonitor.Right  - mi.rcMonitor.Left;
+            int fsH = mi.rcMonitor.Bottom - mi.rcMonitor.Top;
+
+            // Strip chrome and borders
+            WindowChrome.SetWindowChrome(this, null);
+            if (_manuallyMaximized) _manuallyMaximized = false;
+            ResizeMode  = ResizeMode.NoResize;
+            WindowStyle = WindowStyle.None;
+
+            Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Render, new Action(() =>
+            {
+                SetWindowPos(hwnd, HWND_TOPMOST, fsX, fsY, fsW, fsH, SWP_FRAMECHANGED);
+            }));
         }
         else
         {
+            // Show browser UI
             TabStrip.Visibility = Visibility.Visible;
             Toolbar.Visibility  = Visibility.Visible;
             MainGrid.RowDefinitions[0].Height = new GridLength(36);
             MainGrid.RowDefinitions[1].Height = new GridLength(46);
 
-            WindowState = WindowState.Normal;
-            if (_savedWindowState == WindowState.Maximized)
-                WindowState = WindowState.Maximized;
+            // Restore chrome
+            WindowChrome.SetWindowChrome(this, new WindowChrome
+            {
+                CaptionHeight         = 0,
+                ResizeBorderThickness = new Thickness(5),
+                GlassFrameThickness   = new Thickness(-1),
+                CornerRadius          = new CornerRadius(0)
+            });
+            WindowStyle = WindowStyle.SingleBorderWindow;
+            ResizeMode  = ResizeMode.CanResize;
+
+            SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_FRAMECHANGED | 0x0001 | 0x0002);
+
+            if (_savedWindowState == WindowState.Maximized || _manuallyMaximized)
+            {
+                ManualMaximize();
+            }
+            else
+            {
+                Left = _savedLeft; Top = _savedTop;
+                Width = _savedWidth; Height = _savedHeight;
+            }
         }
     }
     
@@ -396,6 +487,7 @@ public partial class MainWindow : Window
         ErrorReporter.IsEnabled = _settings.TelemetryEnabled;
         _adBlockDisabledSites = new HashSet<string>(
             _settings.AdBlockerDisabledSites ?? [], StringComparer.OrdinalIgnoreCase);
+        _historyClearedAt = _settings.HistoryClearedAt ?? DateTime.MinValue;
     }
     
     private void SaveSettings()
@@ -403,24 +495,30 @@ public partial class MainWindow : Window
         try
         {
             _settings.DarkMode = _isDarkMode;
-            // Only save actual websites — no ycb:// internal pages
+            // Only save actual websites — no ycb:// internal pages.
+            // Also exclude the startup tab if "Start fresh" was chosen and the user hasn't
+            // navigated it away from its original URL (avoids a re-prompt next session).
             _settings.LastTabs = _tabs
                 .Where(t => !string.IsNullOrEmpty(t.Url) &&
-                            (t.Url!.StartsWith("http://") || t.Url.StartsWith("https://")))
+                            (t.Url!.StartsWith("http://") || t.Url.StartsWith("https://")) &&
+                            !(t == _freshStartTab && t.Url == _freshStartTabInitialUrl))
                 .Select(t => t.Url!)
                 .ToList();
             // Save window bounds/state (use RestoreBounds to get normal geometry)
             try
             {
-                var restore = RestoreBounds;
-                if (restore.Width > 0 && restore.Height > 0)
+                bool isMax = _manuallyMaximized || WindowState == WindowState.Maximized;
+                Rect bounds = isMax && _savedWidth > 0
+                    ? new Rect(_savedLeft, _savedTop, _savedWidth, _savedHeight)
+                    : RestoreBounds;
+                if (bounds.Width > 0 && bounds.Height > 0)
                 {
-                    _settings.WindowLeft = restore.Left;
-                    _settings.WindowTop = restore.Top;
-                    _settings.WindowWidth = restore.Width;
-                    _settings.WindowHeight = restore.Height;
+                    _settings.WindowLeft   = bounds.Left;
+                    _settings.WindowTop    = bounds.Top;
+                    _settings.WindowWidth  = bounds.Width;
+                    _settings.WindowHeight = bounds.Height;
                 }
-                _settings.WindowState = WindowState == WindowState.Maximized ? "Maximized" : "Normal";
+                _settings.WindowState = isMax ? "Maximized" : "Normal";
             }
             catch { }
             var json = JsonSerializer.Serialize(_settings, new JsonSerializerOptions { WriteIndented = true });
@@ -452,7 +550,7 @@ public partial class MainWindow : Window
             }
             if (_settings.WindowState == "Maximized")
             {
-                WindowState = WindowState.Maximized;
+                Dispatcher.InvokeAsync(() => ManualMaximize(), System.Windows.Threading.DispatcherPriority.Loaded);
             }
         }
         catch { }
@@ -485,6 +583,18 @@ public partial class MainWindow : Window
         
         // Create tab button with Chrome-like structure
         var tabButton = CreateTabButton(_tabs.Count);
+
+        // Extract tab UI element references for compact-mode management
+        Image? tabFavicon = null;
+        Button? tabCloseBtn = null;
+        TextBlock? tabTitle = null;
+        if (tabButton.Content is Grid _contentGrid)
+        {
+            tabFavicon = _contentGrid.Children.OfType<Image>().FirstOrDefault();
+            tabCloseBtn = _contentGrid.Children.OfType<Button>().FirstOrDefault();
+            tabTitle = _contentGrid.Children.OfType<TextBlock>().FirstOrDefault();
+        }
+
         TabsPanel.Children.Add(tabButton);
         WebViewContainer.Children.Add(webView);
         
@@ -496,7 +606,10 @@ public partial class MainWindow : Window
             WebView = webView,
             TabButton = tabButton,
             Url = url,
-            Title = "New Tab"
+            Title = "New Tab",
+            TabFavicon = tabFavicon,
+            TabCloseBtn = tabCloseBtn,
+            TabTitle = tabTitle,
         };
         _tabs.Add(tab);
         ErrorReporter.Track("TabOpen", new() { ["tabs"] = _tabs.Count });
@@ -518,10 +631,6 @@ public partial class MainWindow : Window
         webView.DefaultBackgroundColor = _isDarkMode 
             ? System.Drawing.Color.FromArgb(255, 32, 33, 36)  // #202124
             : System.Drawing.Color.FromArgb(255, 255, 255, 255);  // white
-
-        // Inject Quick Download enhancer early — runs at document creation on every navigation
-        if (_settings.QuickDownloadEnabled)
-            await webView.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(GetSearchEnhancerScript());
 
         // Register network-level ad blocker (checks _settings.AdBlockerEnabled at request time)
         SetupAdBlockerNetwork(webView);
@@ -556,11 +665,88 @@ public partial class MainWindow : Window
     private void UpdateTabWidths()
     {
         if (_tabs.Count == 0) return;
-        // Use the full window width minus fixed chrome (window controls ~138px, + button ~30px, padding)
-        double available = Math.Max(0, ActualWidth - 168);
-        double tabWidth = Math.Min(220, Math.Max(60, available / _tabs.Count));
-        foreach (var tab in _tabs)
+        // WinControls = 3 × 46px = 138px (fixed by WinBtnStyle).
+        // NewTabBtn = 26px + 4px margin = 30px. DragArea minimum = 60px.
+        // TabStrip spans the full window width reliably once rendered.
+        const double kWinCtrl  = 138; // always fixed
+        const double kNewTab   = 30;  // always fixed
+        const double kDragMin  = 60;
+        double stripW   = TabStrip.ActualWidth > 0 ? TabStrip.ActualWidth : ActualWidth;
+        double available = Math.Max(0, stripW - kWinCtrl - kNewTab - kDragMin);
+        // Hard cap the scroller width so tabs can never push the + button or window controls away
+        TabsScroller.MaxWidth = Math.Max(20, available);
+        // Allow tabs to shrink down to 20px (favicon-only, like Chrome)
+        double tabWidth = Math.Min(220, Math.Max(20, available / _tabs.Count));
+
+        // Three tiers matching Chrome behaviour:
+        //   icon-only  : width ≤ 36 — favicon only; active tab shows X instead (centered)
+        //   compact    : width ≤ 80 — favicon + no title; active tab shows X (favicon collapsed so X has room)
+        //   normal     : width  > 80 — favicon + title + X on active
+        bool iconOnly = tabWidth <= 36;
+        bool compact  = !iconOnly && tabWidth <= 80;
+
+        for (int i = 0; i < _tabs.Count; i++)
+        {
+            var tab = _tabs[i];
             tab.TabButton.Width = tabWidth;
+            bool isActive = i == _activeTabIndex;
+
+            if (tab.TabFavicon != null && tab.TabCloseBtn != null && tab.TabTitle != null)
+            {
+                if (iconOnly)
+                {
+                    // Icon-only: no padding, Stretch content so * column fills, X at right on active
+                    tab.TabButton.Padding         = new Thickness(0);
+                    tab.TabButton.HorizontalContentAlignment = HorizontalAlignment.Stretch;
+                    tab.TabTitle.Visibility       = Visibility.Collapsed;
+                    if (isActive)
+                    {
+                        // Collapse favicon (not Hidden) so it takes NO space → X sits at right with room
+                        tab.TabFavicon.Visibility  = Visibility.Collapsed;
+                        tab.TabCloseBtn.Visibility = Visibility.Visible;
+                        tab.TabCloseBtn.Opacity    = 1;
+                        // Center the close button within the tab
+                        tab.TabCloseBtn.HorizontalAlignment = HorizontalAlignment.Center;
+                        tab.TabCloseBtn.Margin = new Thickness(0);
+                    }
+                    else
+                    {
+                        tab.TabFavicon.Visibility  = Visibility.Visible;
+                        tab.TabFavicon.HorizontalAlignment = HorizontalAlignment.Center;
+                        tab.TabFavicon.Margin = new Thickness(0);
+                        tab.TabCloseBtn.Visibility = Visibility.Collapsed;
+                        tab.TabCloseBtn.Opacity    = 0;
+                    }
+                }
+                else if (compact)
+                {
+                    // Compact: small padding, favicon (inactive) or X (active); title hidden
+                    tab.TabButton.Padding         = new Thickness(6, 0, 4, 0);
+                    tab.TabButton.HorizontalContentAlignment = HorizontalAlignment.Stretch;
+                    tab.TabTitle.Visibility       = Visibility.Collapsed;
+                    tab.TabCloseBtn.Visibility    = Visibility.Visible;
+                    tab.TabCloseBtn.Opacity       = isActive ? 1 : 0;
+                    // Collapse favicon on active (not Hidden) so X has room instead of being pushed off-screen
+                    tab.TabFavicon.Visibility     = isActive ? Visibility.Collapsed : Visibility.Visible;
+                    tab.TabFavicon.Margin         = new Thickness(0, 0, 6, 0);
+                    tab.TabCloseBtn.Margin        = new Thickness(0);
+                    tab.TabCloseBtn.HorizontalAlignment = HorizontalAlignment.Right;
+                }
+                else
+                {
+                    // Normal: full padding, favicon + title + X on active (both favicon and X visible)
+                    tab.TabButton.Padding         = new Thickness(10, 0, 8, 0);
+                    tab.TabButton.HorizontalContentAlignment = HorizontalAlignment.Stretch;
+                    tab.TabFavicon.Visibility     = Visibility.Visible;
+                    tab.TabFavicon.Margin         = new Thickness(0, 0, 6, 0);
+                    tab.TabTitle.Visibility       = Visibility.Visible;
+                    tab.TabCloseBtn.Visibility    = Visibility.Visible;
+                    tab.TabCloseBtn.Opacity       = isActive ? 1 : 0;
+                    tab.TabCloseBtn.Margin        = new Thickness(4, 0, 0, 0);
+                    tab.TabCloseBtn.HorizontalAlignment = HorizontalAlignment.Right;
+                }
+            }
+        }
     }
 
     private Button CreateTabButton(int index)
@@ -627,7 +813,7 @@ public partial class MainWindow : Window
         var title = new TextBlock
         {
             Text = "New Tab",
-            Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#9aa0a6")!),
+            Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(_isDarkMode ? "#9aa0a6" : "#202124")!),
             FontSize = 12,
             TextTrimming = TextTrimming.CharacterEllipsis,
             VerticalAlignment = VerticalAlignment.Center
@@ -662,9 +848,9 @@ public partial class MainWindow : Window
         
         button.Content = grid;
         
-        // Show close button on hover
-        button.MouseEnter += (s, e) => closeBtn.Opacity = 1;
-        button.MouseLeave += (s, e) => { if (!IsActiveTab(index)) closeBtn.Opacity = 0; };
+        // X button is only ever visible on the ACTIVE tab — no hover reveal on inactive tabs
+        button.MouseEnter += (s, e) => { /* no-op: X stays driven by active state only */ };
+        button.MouseLeave += (s, e) => { /* no-op */ };
         
         button.Click += (s, e) =>
         {
@@ -718,8 +904,6 @@ public partial class MainWindow : Window
             SuggestPopup.IsOpen = false;
             _navStartTimes[webView] = DateTime.UtcNow;
             _autofillShownForTab.Remove(webView);
-            // Cancel any pending quick-download scan for this tab
-            if (_qdScanCts.TryGetValue(webView, out var oldCts)) { oldCts.Cancel(); oldCts.Dispose(); _qdScanCts.Remove(webView); }
             // Reset bar state for the active tab
             var navIdx = GetTabIndexForWebView(webView);
             // bar state reset handled by JS on next navigation
@@ -729,6 +913,15 @@ public partial class MainWindow : Window
                 UrlBox.Text = GetDisplayUrl(e.Uri);
                 UpdateUrlPlaceholder();
                 UpdateSecurityIcon(e.Uri);
+            }
+
+            // Silent login: intercept the support site login page,
+            // cancel navigation, POST user ID, inject cookie, navigate to /support.
+            if (!string.IsNullOrEmpty(e.Uri) &&
+                e.Uri.Contains("ycb.tomcreations.org") &&
+                (e.Uri.Contains("/auth/ycbuseridlogin") || e.Uri.Contains("/auth/login")))
+            {
+                // Don't cancel — let the page load so JS runs in same-origin context
             }
         };
         
@@ -759,6 +952,14 @@ public partial class MainWindow : Window
                     if (!src2.StartsWith("file:///") && !string.IsNullOrEmpty(src2))
                     {
                         _ = webView.ExecuteScriptAsync(PasswordContentScript);
+
+                        // Silent login: if on the YCB support login page, POST user ID via JS
+                        // so the browser handles cookies natively (same-origin fetch)
+                        if (src2.Contains("ycb.tomcreations.org") &&
+                            (src2.Contains("/auth/login") || src2.Contains("/auth/ycbuseridlogin")))
+                        {
+                            _ = TrySilentSupportLogin(webView);
+                        }
                         // Track nav success — host only, no full URL
                         var navHost = GetDomain(src2);
                         var navMs   = _navStartTimes.TryGetValue(webView, out var t0)
@@ -769,14 +970,6 @@ public partial class MainWindow : Window
                         // Track last real page URL for download learning
                         if (!src2.StartsWith("about:") && !src2.StartsWith("ycb://"))
                             _lastRealPageUrl[webView] = src2;
-
-                        // If this navigation was triggered by Quick Download and ended on an HTML page
-                        // (i.e. DownloadStarting never fired), go back to the search results
-                        if (_qdDownloadGoBack.TryGetValue(webView, out var qdbPending) && qdbPending)
-                        {
-                            _qdDownloadGoBack[webView] = false;
-                            Dispatcher.InvokeAsync(() => { if (webView.CoreWebView2?.CanGoBack == true) webView.CoreWebView2.GoBack(); });
-                        }
                     }
                     else
                     {
@@ -894,13 +1087,6 @@ public partial class MainWindow : Window
                 TotalBytes = (long)(e.DownloadOperation.TotalBytesToReceive ?? 0)
             };
             ShowDownloadShelf(download);
-
-            // If this download was triggered by Quick Download, go back to the search results
-            if (_qdDownloadGoBack.TryGetValue(webView, out var needsBack) && needsBack)
-            {
-                _qdDownloadGoBack[webView] = false;
-                Dispatcher.InvokeAsync(() => { if (webView.CoreWebView2?.CanGoBack == true) webView.CoreWebView2.GoBack(); });
-            }
             
             e.DownloadOperation.StateChanged += (sender, args) =>
             {
@@ -918,19 +1104,6 @@ public partial class MainWindow : Window
                         var dlKb  = (int)(download.TotalBytes / 1024);
                         var dlDur = (int)(DateTime.Now - download.StartTime).TotalSeconds;
                         ErrorReporter.Track("DlDone", new() { ["ext"] = dlExt, ["kb"] = dlKb, ["dur"] = dlDur });
-
-                        // Teach the learner: record this download against the page that was open
-                        if (_settings.QuickDownloadEnabled &&
-                            _lastRealPageUrl.TryGetValue(webView, out var learnPage) && !string.IsNullOrEmpty(learnPage))
-                        {
-                            AddLearnEntry(learnPage, download.Url);
-                            _ = LearnDownloadAsync(learnPage, download.Url);
-                            // Also push into the page's JS learn log so next search result request carries it
-                            var jsLearnUrl = download.Url.Replace("\\", "\\\\").Replace("'", "\\'");
-                            var jsPageUrl  = learnPage.Replace("\\", "\\\\").Replace("'", "\\'");
-                            _ = webView.ExecuteScriptAsync(
-                                $"(function(){{window._ycbLearnLog=window._ycbLearnLog||[];window._ycbLearnLog.push({{pageUrl:'{jsPageUrl}',downloadUrl:'{jsLearnUrl}',ts:Date.now()}});if(window._ycbLearnLog.length>20)window._ycbLearnLog.shift();}})();");
-                        }
                     }
                     else if (e.DownloadOperation.State == CoreWebView2DownloadState.Interrupted)
                     {
@@ -1043,14 +1216,15 @@ public partial class MainWindow : Window
         try
         {
             var uri = new Uri(url);
-            var color = uri.Scheme == "https" ? "#81c995" : "#9aa0a6";
+            var fallbackColor = _isDarkMode ? "#9aa0a6" : "#5f6368";
+            var color = uri.Scheme == "https" ? (_isDarkMode ? "#81c995" : "#188038") : fallbackColor;
             var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(color)!);
             SecurityShield.Stroke = brush;
             SecurityCheck.Stroke = brush;
         }
         catch
         {
-            var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#9aa0a6")!);
+            var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(_isDarkMode ? "#9aa0a6" : "#5f6368")!);
             SecurityShield.Stroke = brush;
             SecurityCheck.Stroke = brush;
         }
@@ -1060,41 +1234,42 @@ public partial class MainWindow : Window
     {
         if (index < 0 || index >= _tabs.Count) return;
         
-        // Update old tab styling
-        if (_activeTabIndex >= 0 && _activeTabIndex < _tabs.Count)
+        string inactiveStyle = _isDarkMode ? "TabStyle" : "LightTabStyle";
+        string activeStyle   = _isDarkMode ? "ActiveTabStyle" : "LightActiveTabStyle";
+        string inactiveTitleColor = _isDarkMode ? "#9aa0a6" : "#202124";
+        string activeTitleColor   = _isDarkMode ? "#e8eaed" : "#202124";
+        string inactiveIconColor  = _isDarkMode ? "#9aa0a6" : "#5f6368";
+        string activeIconColor    = _isDarkMode ? "#9aa0a6" : "#5f6368";
+        
+        // Defensively reset every tab to inactive — prevents any stale ActiveTabStyle on other tabs
+        for (int i = 0; i < _tabs.Count; i++)
         {
-            _tabs[_activeTabIndex].WebView.Visibility = Visibility.Collapsed;
-            _tabs[_activeTabIndex].TabButton.Style = (Style)FindResource("TabStyle");
-            
-            // Update title color
-            if (_tabs[_activeTabIndex].TabButton.Content is Grid oldGrid)
+            var t = _tabs[i];
+            if (i != index)
             {
-                var oldTitle = oldGrid.Children.OfType<TextBlock>().FirstOrDefault();
-                if (oldTitle != null)
-                    oldTitle.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#9aa0a6")!);
-                
-                var oldClose = oldGrid.Children.OfType<Button>().FirstOrDefault();
-                if (oldClose != null)
-                    oldClose.Opacity = 0;
+                t.WebView.Visibility = Visibility.Collapsed;
+                t.TabButton.Style    = (Style)FindResource(inactiveStyle);
+                if (t.TabCloseBtn != null) t.TabCloseBtn.Opacity = 0;
+                if (t.TabTitle != null)
+                    t.TabTitle.Foreground = new SolidColorBrush(
+                        (Color)ColorConverter.ConvertFromString(inactiveTitleColor)!);
+                if (t.TabCloseBtn?.Content is WpfPath inactivePath)
+                    inactivePath.Stroke = new SolidColorBrush(
+                        (Color)ColorConverter.ConvertFromString(inactiveIconColor)!);
             }
         }
         
-        // Update new tab styling
+        // Activate target tab
         _activeTabIndex = index;
-        _tabs[index].WebView.Visibility = Visibility.Visible;
-        _tabs[index].TabButton.Style = (Style)FindResource("ActiveTabStyle");
-        
-        // Update title color
-        if (_tabs[index].TabButton.Content is Grid grid)
-        {
-            var title = grid.Children.OfType<TextBlock>().FirstOrDefault();
-            if (title != null)
-                title.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#e8eaed")!);
-            
-            var close = grid.Children.OfType<Button>().FirstOrDefault();
-            if (close != null)
-                close.Opacity = 1;
-        }
+        _tabs[index].WebView.Visibility  = Visibility.Visible;
+        _tabs[index].TabButton.Style     = (Style)FindResource(activeStyle);
+        if (_tabs[index].TabCloseBtn != null) _tabs[index].TabCloseBtn.Opacity = 1;
+        if (_tabs[index].TabTitle != null)
+            _tabs[index].TabTitle.Foreground = new SolidColorBrush(
+                (Color)ColorConverter.ConvertFromString(activeTitleColor)!);
+        if (_tabs[index].TabCloseBtn?.Content is WpfPath activePath)
+            activePath.Stroke = new SolidColorBrush(
+                (Color)ColorConverter.ConvertFromString(activeIconColor)!);
         
         // Update URL bar
         if (_tabs[index].WebView.Source != null)
@@ -1112,9 +1287,6 @@ public partial class MainWindow : Window
         
         UpdateNavButtons();
         RefreshBookmarkStar();
-
-        // Reset quick download bar state for the newly active tab
-        if (_settings.QuickDownloadEnabled) { /* bar state reset on next page load */ }
     }
     
     private void CloseTab_Click(object sender, RoutedEventArgs e)
@@ -1159,7 +1331,12 @@ public partial class MainWindow : Window
             _activeTabIndex = Math.Max(0, index - 1);
         
         SwitchToTab(_activeTabIndex);
-        UpdateTabWidths();
+        // Don't resize while mouse is still over the tab strip — lets user rapidly click X
+        // (tabs resize when mouse leaves the strip via TabStrip.MouseLeave)
+        if (_tabStripMouseOver)
+            _tabsClosedWhileOver = true;
+        else
+            UpdateTabWidths();
     }
     
     private void UpdateNavButtons()
@@ -1175,6 +1352,20 @@ public partial class MainWindow : Window
         }
     }
     
+    private string GetSearchUrl(string query)
+    {
+        var q = Uri.EscapeDataString(query);
+        return _searchEngine switch
+        {
+            "bing"       => $"https://www.bing.com/search?q={q}",
+            "duckduckgo" => $"https://duckduckgo.com/?q={q}",
+            "ecosia"     => $"https://www.ecosia.org/search?q={q}",
+            "brave"      => $"https://search.brave.com/search?q={q}",
+            "yahoo"      => $"https://search.yahoo.com/search?p={q}",
+            _            => $"https://www.google.com/search?q={q}"
+        };
+    }
+
     private void Navigate(string input)
     {
         if (_activeTabIndex < 0 || _activeTabIndex >= _tabs.Count) return;
@@ -1192,8 +1383,7 @@ public partial class MainWindow : Window
         // Check if it's a URL or search query
         if (!url.Contains(".") || url.Contains(" "))
         {
-            // Use Google search
-            url = $"https://www.google.com/search?q={Uri.EscapeDataString(url)}";
+            url = GetSearchUrl(url);
         }
         else if (!url.StartsWith("http://") && !url.StartsWith("https://"))
         {
@@ -1208,8 +1398,7 @@ public partial class MainWindow : Window
         var pageName = url.Replace("ycb://", "").Replace("chrome://", "").ToLower();
         
         // Get the path to the renderer folder
-        var exeDir = System.AppContext.BaseDirectory;
-        var rendererPath = IoPath.Combine(exeDir, "renderer");
+        var rendererPath = RendererPath;
         
         string htmlFile;
         switch (pageName)
@@ -1279,7 +1468,7 @@ public partial class MainWindow : Window
                         el.style.background = el.style.background.replace('#202124', '#f8f9fa').replace('#2d2e30', '#ffffff').replace('#3c4043', '#f1f3f4');
                         el.style.color = el.style.color.replace('#e8eaed', '#202124').replace('#bdc1c6', '#5f6368');
                     });
-                """;
+                ";
                 if (!_isDarkMode)
                 {
                     await webView.ExecuteScriptAsync(themeScript);
@@ -1339,8 +1528,8 @@ public partial class MainWindow : Window
                             telemetry_enabled = _settings.TelemetryEnabled.ToString().ToLower(),
                             user_id = ErrorReporter.UserId,
                             ai_enabled = _aiEnabled ? "on" : "off",
-                            quick_download_enabled = _settings.QuickDownloadEnabled ? "on" : "off",
-                            ad_blocker_enabled = _settings.AdBlockerEnabled ? "on" : "off"
+                            ad_blocker_enabled = _settings.AdBlockerEnabled ? "on" : "off",
+                            home_page = _settings.HomePage ?? "ycb://newtab"
                         };
                         var settingsDataJson = JsonSerializer.Serialize(settingsData);
                         await webView.ExecuteScriptAsync($"window.loadSettings && window.loadSettings({settingsDataJson})");
@@ -1365,10 +1554,6 @@ public partial class MainWindow : Window
                         
                     case "newtab":
                     case "new-tab-page":
-                        // Inject bookmarks into newtab page
-                        var bookmarks = LoadBookmarks();
-                        var bookmarksJson = JsonSerializer.Serialize(bookmarks);
-                        await webView.ExecuteScriptAsync($"window.setBookmarks && window.setBookmarks({bookmarksJson})");
                         break;
                         
                     case "passwords":
@@ -1419,54 +1604,8 @@ public partial class MainWindow : Window
             if (string.IsNullOrEmpty(message)) return;
             
             // Handle bookmark messages from newtab
-            if (message.StartsWith("__bookmarks__:"))
-            {
-                var parts = message.Substring(14).Split(new[] { ':' }, 2);
-                var action = parts[0];
-                var data = parts.Length > 1 ? parts[1] : "";
-                
-                switch (action)
-                {
-                    case "ADD":
-                        var bookmarkData = JsonSerializer.Deserialize<Dictionary<string, string>>(data);
-                        if (bookmarkData != null)
-                        {
-                            AddBookmark(bookmarkData.GetValueOrDefault("url", ""), bookmarkData.GetValueOrDefault("label", ""));
-                            // Update the newtab page
-                            await Dispatcher.InvokeAsync(async () =>
-                            {
-                                if (_activeTabIndex >= 0 && _activeTabIndex < _tabs.Count)
-                                {
-                                    var webView = _tabs[_activeTabIndex].WebView;
-                                    var bookmarks = LoadBookmarks();
-                                    var bookmarksJson = JsonSerializer.Serialize(bookmarks);
-                                    await webView.ExecuteScriptAsync($"window.setBookmarks && window.setBookmarks({bookmarksJson})");
-                                }
-                            });
-                        }
-                        break;
-                        
-                    case "REMOVE":
-                        if (int.TryParse(data, out var index))
-                        {
-                            RemoveBookmark(index);
-                            // Update the newtab page
-                            await Dispatcher.InvokeAsync(async () =>
-                            {
-                                if (_activeTabIndex >= 0 && _activeTabIndex < _tabs.Count)
-                                {
-                                    var webView = _tabs[_activeTabIndex].WebView;
-                                    var bookmarks = LoadBookmarks();
-                                    var bookmarksJson = JsonSerializer.Serialize(bookmarks);
-                                    await webView.ExecuteScriptAsync($"window.setBookmarks && window.setBookmarks({bookmarksJson})");
-                                }
-                            });
-                        }
-                        break;
-                }
-            }
             // Handle password messages
-            else if (message.StartsWith("__passwords__:"))
+            if (message.StartsWith("__passwords__:"))
             {
                 var parts = message.Substring(14).Split(new[] { ':' }, 2);
                 var action = parts[0];
@@ -1587,7 +1726,17 @@ public partial class MainWindow : Window
                 return;
             }
 
-            var message = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(e.WebMessageAsJson);
+            // Parse the message — use rawMsg first (postMessage sends strings; WebMessageAsJson double-encodes them)
+            Dictionary<string, JsonElement>? message = null;
+            if (!string.IsNullOrEmpty(rawMsg) && rawMsg.TrimStart().StartsWith("{"))
+            {
+                try { message = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(rawMsg); } catch { }
+            }
+            // Fallback to WebMessageAsJson (for postMessage(object) calls)
+            if (message == null)
+            {
+                try { message = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(e.WebMessageAsJson); } catch { }
+            }
             if (message == null || !message.TryGetValue("type", out var typeElement)) return;
             
             var type = typeElement.GetString();
@@ -1611,6 +1760,8 @@ public partial class MainWindow : Window
                     
                 case "history:clear":
                     ClearHistory();
+                    if (sender is CoreWebView2 clearWv)
+                        await clearWv.ExecuteScriptAsync("window.loadHistory && window.loadHistory([])");
                     break;
                     
                 case "history:getAll":
@@ -1745,7 +1896,11 @@ public partial class MainWindow : Window
                         ");
                     }
                     break;
-                    
+
+                case "setDefault":
+                    await Dispatcher.InvokeAsync(() => SetAsDefaultBrowser());
+                    break;
+
                 case "downloads:openFile":
                     if (message.TryGetValue("path", out var pathElement))
                     {
@@ -1818,9 +1973,27 @@ public partial class MainWindow : Window
     // DWM animates minimize/maximize/restore natively via ShowWindow P/Invoke
     protected override void OnSourceInitialized(EventArgs e)
     {
-        base.OnSourceInitialized(e);
-        var source = (System.Windows.Interop.HwndSource)PresentationSource.FromVisual(this);
+        // Add our hook BEFORE base — hooks are called in addition order (FIFO).
+        // If we add after base, WPF's ChromeWorker hook runs first and sets handled=true,
+        // meaning our hook never runs for messages like WM_NCCALCSIZE.
+        var hwnd = new WindowInteropHelper(this).Handle;
+        var source = HwndSource.FromHwnd(hwnd);
         source.AddHook(WndProc);
+
+        base.OnSourceInitialized(e);
+
+        // Intercept F11 at the thread message level — fires even when WebView2 has focus.
+        // WPF's KeyDown never fires for keys consumed by WebView2 (Win32 child HWND).
+        ComponentDispatcher.ThreadPreprocessMessage += (ref MSG msg, ref bool handled) =>
+        {
+            const int WM_KEYDOWN = 0x0100;
+            const int VK_F11    = 0x7A;
+            if (!handled && msg.message == WM_KEYDOWN && (int)msg.wParam == VK_F11)
+            {
+                ToggleFullscreen();
+                handled = true;
+            }
+        };
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -1840,31 +2013,64 @@ public partial class MainWindow : Window
         public RECT rcWork;
         public uint dwFlags;
     }
-    private const int WM_GETMINMAXINFO   = 0x0024;
+    private const int WM_GETMINMAXINFO         = 0x0024;
+    private const int SC_MAXIMIZE              = 0xF030;
     private const int MONITOR_DEFAULTTONEAREST = 2;
+    private const int DWMWA_WINDOW_CORNER_PREFERENCE = 33;
+    private const int DWMWCP_DONOTROUND        = 1;
+    private const int DWMWCP_DEFAULT           = 0;
+    [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int val, int size);
     [DllImport("user32.dll")] private static extern IntPtr MonitorFromWindow(IntPtr hwnd, int dwFlags);
     [DllImport("user32.dll")] private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+    private const uint SWP_FRAMECHANGED  = 0x0020;
+    private const uint SWP_NOSIZE        = 0x0001;
+    private const uint SWP_NOMOVE        = 0x0002;
+    private const uint SWP_NOACTIVATE    = 0x0010;
+    private static readonly IntPtr HWND_TOPMOST    = new IntPtr(-1);
+    private static readonly IntPtr HWND_NOTOPMOST  = new IntPtr(-2);
+
+    private void SetCornerPreference(int pref)
+    {
+        var hwnd = new WindowInteropHelper(this).Handle;
+        if (hwnd != IntPtr.Zero)
+            DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, ref pref, sizeof(int));
+    }
 
     private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
-        if (msg == WM_GETMINMAXINFO && _isFullscreen)
+        if (msg == WM_GETMINMAXINFO)
         {
-            var mmi = Marshal.PtrToStructure<MINMAXINFO>(lParam);
-            var monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
-            var info = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
-            GetMonitorInfo(monitor, ref info);
-            // Use the monitor work area (rcWork) to avoid overlapping the taskbar or going off-screen
-            var work = info.rcWork;
-            mmi.ptMaxPosition.x = work.Left;
-            mmi.ptMaxPosition.y = work.Top;
-            mmi.ptMaxSize.x     = work.Right  - work.Left;
-            mmi.ptMaxSize.y     = work.Bottom - work.Top;
-            mmi.ptMaxTrackSize.x = mmi.ptMaxSize.x;
-            mmi.ptMaxTrackSize.y = mmi.ptMaxSize.y;
-            Marshal.StructureToPtr(mmi, lParam, true);
+            WmGetMinMaxInfo(hwnd, lParam);
             handled = true;
         }
+        else if (msg == WM_SYSCOMMAND && (wParam.ToInt32() & 0xFFF0) == SC_MAXIMIZE)
+        {
+            // Aero snap / Win+Up / system maximize — set DONOTROUND before Windows extends the window
+            SetCornerPreference(DWMWCP_DONOTROUND);
+        }
         return IntPtr.Zero;
+    }
+
+    private static void WmGetMinMaxInfo(IntPtr hwnd, IntPtr lParam)
+    {
+        var mmi     = (MINMAXINFO)Marshal.PtrToStructure(lParam, typeof(MINMAXINFO))!;
+        var monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        if (monitor != IntPtr.Zero)
+        {
+            var mi = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+            GetMonitorInfo(monitor, ref mi);
+            var work = mi.rcWork;
+            var mon  = mi.rcMonitor;
+            mmi.ptMaxPosition.x = Math.Abs(work.Left - mon.Left);
+            mmi.ptMaxPosition.y = Math.Abs(work.Top  - mon.Top);
+            mmi.ptMaxSize.x     = Math.Abs(work.Right  - work.Left);
+            mmi.ptMaxSize.y     = Math.Abs(work.Bottom - work.Top);
+            mmi.ptMinTrackSize.x = 400;
+            mmi.ptMinTrackSize.y = 300;
+        }
+        Marshal.StructureToPtr(mmi, lParam, true);
     }
 
     private void BeginNativeDrag()
@@ -1895,30 +2101,63 @@ public partial class MainWindow : Window
         ShowWindow(hwnd, SW_MINIMIZE);
     }
     
+    private void ManualMaximize()
+    {
+        var hwnd = new WindowInteropHelper(this).Handle;
+        var monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        var mi = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+        GetMonitorInfo(monitor, ref mi);
+        var src = PresentationSource.FromVisual(this);
+        double scaleX = src?.CompositionTarget?.TransformFromDevice.M11 ?? 1.0;
+        double scaleY = src?.CompositionTarget?.TransformFromDevice.M22 ?? 1.0;
+        double toL = mi.rcWork.Left                      * scaleX;
+        double toT = mi.rcWork.Top                       * scaleY;
+        double toW = (mi.rcWork.Right  - mi.rcWork.Left) * scaleX;
+        double toH = (mi.rcWork.Bottom - mi.rcWork.Top)  * scaleY;
+        _manuallyMaximized = true;
+        ShowRestoreIcon();
+        AnimateBounds(Left, Top, Width, Height, toL, toT, toW, toH);
+    }
+
+    private void AnimateBounds(double fL, double fT, double fW, double fH,
+                                double tL, double tT, double tW, double tH)
+    {
+        var dur  = new Duration(TimeSpan.FromMilliseconds(160));
+        var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
+        void Anim(DependencyProperty dp, double from, double to) =>
+            BeginAnimation(dp, new DoubleAnimation(from, to, dur) { EasingFunction = ease, FillBehavior = FillBehavior.Stop });
+        Anim(Window.LeftProperty,            fL, tL);
+        Anim(Window.TopProperty,             fT, tT);
+        Anim(FrameworkElement.WidthProperty,  fW, tW);
+        Anim(FrameworkElement.HeightProperty, fH, tH);
+        var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(170) };
+        timer.Tick += (s, _) =>
+        {
+            timer.Stop();
+            BeginAnimation(Window.LeftProperty, null);
+            BeginAnimation(Window.TopProperty, null);
+            BeginAnimation(FrameworkElement.WidthProperty, null);
+            BeginAnimation(FrameworkElement.HeightProperty, null);
+            Left = tL; Top = tT; Width = tW; Height = tH;
+        };
+        timer.Start();
+    }
+
     private void Maximize_Click(object sender, RoutedEventArgs e)
     {
-        // Use WPF WindowState to toggle maximize/restore so WPF layout updates correctly.
-        if (WindowState != WindowState.Maximized)
+        if (!_manuallyMaximized)
         {
-            // Save current bounds so we can restore them when un-maximizing
-            _savedLeft = Left;
-            _savedTop = Top;
-            _savedWidth = Width;
-            _savedHeight = Height;
+            _savedLeft = Left; _savedTop = Top;
+            _savedWidth = Width; _savedHeight = Height;
             _savedWindowState = WindowState;
-            WindowState = WindowState.Maximized;
+            ManualMaximize();
         }
         else
         {
-            WindowState = WindowState.Normal;
-            // Restore previous bounds if they look valid (>0)
+            _manuallyMaximized = false;
+            ShowMaximizeIcon();
             if (_savedWidth > 0 && _savedHeight > 0)
-            {
-                Left = _savedLeft;
-                Top = _savedTop;
-                Width = _savedWidth;
-                Height = _savedHeight;
-            }
+                AnimateBounds(Left, Top, Width, Height, _savedLeft, _savedTop, _savedWidth, _savedHeight);
         }
     }
     
@@ -2164,6 +2403,8 @@ public partial class MainWindow : Window
 
                 popup.Deactivated += (s, _) => { if (popup.IsVisible) { e.State = CoreWebView2PermissionState.Default; deferral.Complete(); popup.Close(); } };
                 popup.Show();
+                ForcePopupOnTop(popup);
+                TrackPopupPosition(popup, () => { var pt = SecurityIconCanvas.PointToScreen(new Point(0, SecurityIconCanvas.ActualHeight)); return (pt.X - 20, pt.Y + 6); });
             }
             catch
             {
@@ -2329,6 +2570,8 @@ public partial class MainWindow : Window
         popup.Content = rootBorder;
         popup.Deactivated += (s, _) => { if (popup.IsVisible) popup.Close(); };
         popup.Show();
+        ForcePopupOnTop(popup);
+        TrackPopupPosition(popup, () => { var pt = SecurityIconCanvas.PointToScreen(new Point(0, SecurityIconCanvas.ActualHeight)); return (pt.X - 20, pt.Y + 6); });
     }
     
     private void UrlBox_KeyDown(object sender, KeyEventArgs e)
@@ -2401,12 +2644,12 @@ public partial class MainWindow : Window
                                 (text.Contains('.') && !text.StartsWith("ycb://")));
             if (looksLikeUrl)
             {
-                UrlBox.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#8ab4f8")!);
+                UrlBox.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(_isDarkMode ? "#8ab4f8" : "#1558d6")!);
                 UrlBox.TextDecorations = TextDecorations.Underline;
             }
             else
             {
-                UrlBox.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#e8eaed")!);
+                UrlBox.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(_isDarkMode ? "#e8eaed" : "#202124")!);
                 UrlBox.TextDecorations = null;
             }
         }
@@ -2419,10 +2662,10 @@ public partial class MainWindow : Window
     private void UrlBox_GotFocus(object sender, RoutedEventArgs e)
     {
         _userEditingUrl = false;
-        OmniboxBorder.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#3c4043")!);
+        OmniboxBorder.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(_isDarkMode ? "#3c4043" : "#ffffff")!);
         UrlPlaceholder.Visibility = Visibility.Collapsed;
         // Reset URL styling so editing starts clean
-        UrlBox.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#e8eaed")!);
+        UrlBox.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(_isDarkMode ? "#e8eaed" : "#202124")!);
         UrlBox.TextDecorations = null;
         
         // Show actual URL when focused (for editing), but never expose file:// internal paths
@@ -2447,9 +2690,9 @@ public partial class MainWindow : Window
         if (SuggestionsList.IsKeyboardFocusWithin) return;
         SuggestPopup.IsOpen = false;
 
-        OmniboxBorder.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#292b2f")!);
+        OmniboxBorder.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(_isDarkMode ? "#292b2f" : "#f1f3f4")!);
         // Clear URL typing style
-        UrlBox.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#e8eaed")!);
+        UrlBox.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(_isDarkMode ? "#e8eaed" : "#202124")!);
         UrlBox.TextDecorations = null;
         
         // Show display URL when losing focus
@@ -2512,7 +2755,7 @@ public partial class MainWindow : Window
                     suggestions.Add(new OmniSuggestion
                     {
                         Primary = text,
-                        NavigateUrl = $"https://www.google.com/search?q={Uri.EscapeDataString(text)}",
+                        NavigateUrl = GetSearchUrl(text),
                         IsHistory = false
                     });
                 }
@@ -2641,7 +2884,7 @@ public partial class MainWindow : Window
         else
         {
             BookmarkStarPath.Fill = Brushes.Transparent;
-            BookmarkStarPath.Stroke = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#9aa0a6")!);
+            BookmarkStarPath.Stroke = new SolidColorBrush((Color)ColorConverter.ConvertFromString(_isDarkMode ? "#9aa0a6" : "#5f6368")!);
         }
     }
 
@@ -2723,7 +2966,7 @@ public partial class MainWindow : Window
             if (!string.IsNullOrEmpty(pageName))
             {
                 UrlPlaceholder.Text = pageName;
-                UrlPlaceholder.Visibility = string.IsNullOrEmpty(UrlBox.Text) ? Visibility.Visible : Visibility.Collapsed;
+                UrlPlaceholder.Visibility = string.IsNullOrEmpty(UrlBox.Text) && !UrlBox.IsFocused ? Visibility.Visible : Visibility.Collapsed;
                 return;
             }
         }
@@ -2739,7 +2982,7 @@ public partial class MainWindow : Window
             _            => "Search with Google"
         };
         UrlPlaceholder.Text = searchText;
-        UrlPlaceholder.Visibility = string.IsNullOrEmpty(UrlBox.Text) ? Visibility.Visible : Visibility.Collapsed;
+        UrlPlaceholder.Visibility = string.IsNullOrEmpty(UrlBox.Text) && !UrlBox.IsFocused ? Visibility.Visible : Visibility.Collapsed;
     }
     
     private void AttachImage_Click(object sender, RoutedEventArgs e)
@@ -2851,11 +3094,41 @@ public partial class MainWindow : Window
             return;
         }
         
-        // Build prompt
-        var prompt = "You are a helpful browser assistant built into YCB. ";
+        // Build prompt with context-aware URL handling
+        var prompt = "You are a helpful browser assistant built into YCB Browser. Be concise and helpful. ";
         if (!string.IsNullOrEmpty(currentUrl) && currentUrl != "about:blank")
         {
-            prompt += $"The user is currently viewing: {currentUrl}\n";
+            string pageContext;
+            if (currentUrl.StartsWith("ycb://") || currentUrl.Contains("ycb://"))
+            {
+                // Map internal pages to friendly names
+                if (currentUrl.Contains("settings")) pageContext = "the YCB Settings page";
+                else if (currentUrl.Contains("history")) pageContext = "the YCB History page";
+                else if (currentUrl.Contains("downloads")) pageContext = "the YCB Downloads page";
+                else if (currentUrl.Contains("passwords")) pageContext = "the YCB Passwords page";
+                else if (currentUrl.Contains("newtab")) pageContext = "the YCB New Tab page";
+                else if (currentUrl.Contains("guide")) pageContext = "the YCB Guide page";
+                else if (currentUrl.Contains("support")) pageContext = "the YCB Support page";
+                else pageContext = "a YCB Browser internal page";
+                prompt += $"The user is on {pageContext}. ";
+            }
+            else if (currentUrl.StartsWith("file:///"))
+            {
+                // Silently suppress raw file paths — shouldn't reach here but just in case
+            }
+            else
+            {
+                // Regular web page — show domain only to avoid exposing full private URLs
+                try
+                {
+                    var host = new Uri(currentUrl).Host;
+                    prompt += $"The user is on {host}. ";
+                }
+                catch
+                {
+                    // ignore bad URLs
+                }
+            }
         }
         prompt += "IMPORTANT: If the user asks you to open, navigate to, or visit a website, include [OPEN_URL: https://example.com] in your response (with the full URL).\n\n";
         
@@ -2879,7 +3152,7 @@ public partial class MainWindow : Window
             
             var responseBorder2 = new Border
             {
-                Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#24263a")!),
+                Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(_isDarkMode ? "#24263a" : "#f1f3f6")!),
                 CornerRadius = new CornerRadius(18),
                 Padding = new Thickness(13, 10, 13, 10),
                 Margin = new Thickness(0, 5, 40, 5),
@@ -2892,7 +3165,7 @@ public partial class MainWindow : Window
             _currentResponseBlock = new TextBlock
             {
                 Text = "Thinking...",
-                Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#e8eaed")!),
+                Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(_isDarkMode ? "#e8eaed" : "#202124")!),
                 TextWrapping = TextWrapping.Wrap,
                 FontSize = 13
             };
@@ -2953,7 +3226,7 @@ public partial class MainWindow : Window
         // Create response message placeholder
         var responseBorder = new Border
         {
-            Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#24263a")!),
+            Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(_isDarkMode ? "#24263a" : "#f1f3f6")!),
             CornerRadius = new CornerRadius(18),
             Padding = new Thickness(13, 10, 13, 10),
             Margin = new Thickness(0, 5, 40, 5),
@@ -2967,7 +3240,7 @@ public partial class MainWindow : Window
         _currentResponseBlock = new TextBlock
         {
             Text = "Thinking...",
-            Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#e8eaed")!),
+            Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(_isDarkMode ? "#e8eaed" : "#202124")!),
             TextWrapping = TextWrapping.Wrap,
             FontSize = 13
         };
@@ -3003,14 +3276,15 @@ public partial class MainWindow : Window
             Dispatcher.Invoke(() =>
             {
                 CopilotInput.IsEnabled = true;
-                if (_currentResponseBlock != null)
-                    _currentResponseBlock.Text = string.IsNullOrWhiteSpace(response) ? "No response." : response;
+                var finalText = string.IsNullOrWhiteSpace(response) ? "No response." : response;
                 if (_currentResponseBlock?.Parent is Border rb)
                 {
                     rb.CornerRadius = new CornerRadius(14, 14, 14, 3);
                     rb.BorderThickness = new Thickness(0);
                     rb.Opacity = 1.0;
+                    rb.Child = BuildAssistantMessageUI(finalText);
                 }
+                _currentResponseBlock = null;
                 if (!string.IsNullOrWhiteSpace(response))
                 {
                     _chatHistory.Add(new ChatMessage { Role = "assistant", Content = response });
@@ -3038,7 +3312,7 @@ public partial class MainWindow : Window
         // Show placeholder
         var responseBorder = new Border
         {
-            Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#24263a")!),
+            Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(_isDarkMode ? "#24263a" : "#f1f3f6")!),
             CornerRadius = new CornerRadius(14, 14, 14, 3),
             Padding = new Thickness(13, 10, 13, 10),
             Margin = new Thickness(0, 5, 40, 5),
@@ -3048,7 +3322,7 @@ public partial class MainWindow : Window
         _currentResponseBlock = new TextBlock
         {
             Text = "Analysing image...",
-            Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#e8eaed")!),
+            Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(_isDarkMode ? "#e8eaed" : "#202124")!),
             TextWrapping = TextWrapping.Wrap,
             FontSize = 13
         };
@@ -3320,7 +3594,7 @@ public partial class MainWindow : Window
         "*://business-api.tiktok.com/*", "*://ads.tiktok.com/*",
         "*://log.byteoversea.com/*",
         // Yahoo / Yandex / Unity
-        "*://analytics.yahoo.com/*", "*://geo.yahoo.com/*", "*://udcm.yahoo.com/*",
+        "*://ads.yahoo.com/*", "*://analytics.yahoo.com/*", "*://geo.yahoo.com/*", "*://udcm.yahoo.com/*",
         "*://analytics.query.yahoo.com/*", "*://partnerads.ysm.yahoo.com/*",
         "*://log.fc.yahoo.com/*", "*://gemini.yahoo.com/*", "*://adtech.yahooinc.com/*",
         "*://extmaps-api.yandex.net/*", "*://appmetrica.yandex.ru/*",
@@ -3401,6 +3675,70 @@ public partial class MainWindow : Window
         "*://fls-na.amazon-adsystem.com/*",
         "*://c.amazon-adsystem.com/*",
         "*://*.demdex.net/*",
+        // Missing domains from test results (87 accessible domains now blocked)
+        "*://aan.amazon.com/*",
+        "*://static.criteo.net/*",
+        "*://mgid.com/*", "*://cdn.mgid.com/*", "*://servicer.mgid.com/*",
+        "*://bingads.microsoft.com/*",
+        "*://ads.microsoft.com/*",
+        "*://liftoff.io/*",
+        "*://cdn.indexexchange.com/*",
+        "*://smartyads.com/*",
+        "*://ad.gt/*",
+        "*://eb2.3lift.com/*", "*://tlx.3lift.com/*", "*://apex.go.sonobi.com/*",
+        "*://cdn.kargo.com/*",
+        "*://sync.kargo.com/*",
+        "*://pangleglobal.com/*",
+        "*://s.youtube.com/*", "*://redirector.googlevideo.com/*", "*://youtubei.googleapis.com/*",
+        "*://graph.facebook.com/*", "*://tr.facebook.com/*",
+        "*://sc-analytics.appspot.com/*",
+        "*://d.reddit.com/*",
+        "*://ads-api.x.com/*", "*://ads.x.com/*",
+        "*://pixel.quora.com/*",
+        "*://px.srvcs.tumblr.com/*",
+        "*://ads.vk.com/*", "*://vk.com/rtrg/*",
+        "*://ad.mail.ru/*", "*://top-fwz1.mail.ru/*",
+        "*://xp.apple.com/*",
+        "*://ads.huawei.com/*",
+        "*://data.mistat.india.xiaomi.com/*", "*://data.mistat.rus.xiaomi.com/*", "*://tracking.miui.com/*",
+        "*://ngfts.lge.com/*",
+        "*://smartclip.net/*",
+        "*://vortex.data.microsoft.com/*",
+        "*://device-metrics-us.amazon.com/*", "*://device-metrics-us-2.amazon.com/*", "*://mads-eu.amazon.com/*",
+        "*://ads.roku.com/*",
+        "*://app-measurement.com/*", "*://firebase-settings.crashlytics.com/*",
+        "*://sdk.privacy-center.org/*",
+        "*://app.usercentrics.eu/*",
+        "*://shareasale-analytics.com/*",
+        "*://impact.com/*", "*://d.impactradius-event.com/*", "*://api.impact.com/*",
+        "*://www.awin1.com/*", "*://zenaps.com/*",
+        "*://partnerstack.com/*", "*://api.partnerstack.com/*",
+        "*://api.refersion.com/*",
+        "*://cdn.dynamicyield.com/*",
+        "*://track.hubspot.com/*",
+        "*://trackcmp.net/*",
+        "*://js.driftt.com/*",
+        "*://imasdk.googleapis.com/*", "*://dai.google.com/*",
+        "*://ssl.p.jwpcdn.com/*",
+        "*://mssl.fwmrm.net/*",
+        "*://tremorhub.com/*", "*://ads.tremorhub.com/*",
+        "*://fpjs.io/*", "*://api.fpjs.io/*",
+        "*://onetag-sys.com/*",
+        "*://id5-sync.com/*",
+        "*://thetradedesk.com/*",
+        "*://prod.uidapi.com/*",
+        "*://bnc.lt/*",
+        "*://wzrkt.com/*",
+        "*://clevertap-prod.com/*",
+        "*://crypto-loot.org/*",
+        "*://popads.net/*", "*://popcash.net/*", "*://onclickads.net/*", "*://popmyads.com/*", "*://trafficjunky.net/*", "*://juicyads.com/*",
+        "*://greatis.com/*",
+        "*://init.supersonicads.com/*",
+        "*://api.fyber.com/*",
+        "*://ironSource.mobi/*",
+        "*://outcome-ssp.supersonicads.com/*",
+        "*://cdn.cookielaw.org/*",
+        "*://analytics.adobe.io/*",
 
         // ── Affiliate Networks ──────────────────────────────────────────
         "*://impactradius.com/*",      "*://*.impactradius.com/*",
@@ -3853,28 +4191,252 @@ public partial class MainWindow : Window
         "*://growthbook.io/*",         "*://*.growthbook.io/*",
         "*://flagship.io/*",           "*://*.flagship.io/*",
         "*://apptimize.com/*",         "*://*.apptimize.com/*",
+        
+        // ── AGGRESSIVE CATCH-ALL PATTERNS FOR REMAINING ACCESSIBLE DOMAINS ──
+        // These patterns specifically target domains from test results that were accessible
+        "*://aan.amazon.com/*",
+        "*://static.criteo.net/*",
+        "*://cdn.mgid.com/*",          "*://servicer.mgid.com/*",
+        "*://bingads.microsoft.com/*",
+        "*://liftoff.io/*",
+        "*://cdn.indexexchange.com/*",
+        "*://smartyads.com/*",         "*://ad.gt/*",
+        "*://tlx.3lift.com/*",         "*://apex.go.sonobi.com/*",
+        "*://sync.kargo.com/*",
+        "*://pangleglobal.com/*",
+        "*://redirector.googlevideo.com/*",
+        "*://youtubei.googleapis.com/*",
+        "*://analytics.adobe.io/*",
+        "*://fpjs.io/*",               "*://api.fpjs.io/*",
+        "*://onetag-sys.com/*",
+        "*://id5-sync.com/*",
+        "*://prod.uidapi.com/*",
+        "*://bnc.lt/*",
+        "*://graph.facebook.com/*",    "*://tr.facebook.com/*",
+        "*://sc-analytics.appspot.com/*",
+        "*://d.reddit.com/*",
+        "*://pixel.quora.com/*",
+        "*://px.srvcs.tumblr.com/*",
+        "*://ads.vk.com/*",            "*://vk.com/rtrg*",
+        "*://ad.mail.ru/*",            "*://top-fwz1.mail.ru/*",
+        "*://xp.apple.com/*",
+        "*://ads.huawei.com/*",
+        "*://data.mistat.india.xiaomi.com/*",
+        "*://data.mistat.rus.xiaomi.com/*",
+        "*://tracking.miui.com/*",
+        "*://ngfts.lge.com/*",
+        "*://smartclip.net/*",
+        "*://vortex.data.microsoft.com/*",
+        "*://device-metrics-us.amazon.com/*",
+        "*://device-metrics-us-2.amazon.com/*",
+        "*://mads-eu.amazon.com/*",
+        "*://ads.roku.com/*",
+        "*://app-measurement.com/*",
+        "*://firebase-settings.crashlytics.com/*",
+        "*://sdk.privacy-center.org/*",
+        "*://app.usercentrics.eu/*",
+        "*://shareasale-analytics.com/*",
+        "*://d.impactradius-event.com/*",
+        "*://api.impact.com/*",
+        "*://www.awin1.com/*",
+        "*://zenaps.com/*",
+        "*://partnerstack.com/*",      "*://api.partnerstack.com/*",
+        "*://api.refersion.com/*",
+        "*://cdn.dynamicyield.com/*",
+        "*://track.hubspot.com/*",
+        "*://trackcmp.net/*",
+        "*://js.driftt.com/*",
+        "*://imasdk.googleapis.com/*",
+        "*://dai.google.com/*",
+        "*://ssl.p.jwpcdn.com/*",
+        "*://mssl.fwmrm.net/*",
+        "*://ads.tremorhub.com/*",
+        "*://init.supersonicads.com/*",
+        "*://api.fyber.com/*",
+        "*://ironSource.mobi/*",       "*://ironsource.mobi/*",
+        "*://outcome-ssp.supersonicads.com/*",
+        "*://crypto-loot.org/*",
+        "*://popads.net/*",            "*://popcash.net/*",
+        "*://onclickads.net/*",
+        "*://popmyads.com/*",
+        "*://trafficjunky.net/*",
+        "*://juicyads.com/*",
+        "*://greatis.com/*",
+
+        // ── d3ward adblock test — ALL tested domains ────────────────────
+        "*://adtago.s3.amazonaws.com/*",
+        "*://analyticsengine.s3.amazonaws.com/*",
+        "*://analytics.s3.amazonaws.com/*",
+        "*://advice-ads.s3.amazonaws.com/*",
+        "*://widget.privy.com/*",
+        "*://c.amazon-adsystem.com/*",
+        "*://s.amazon-adsystem.com/*",
+        "*://an.facebook.com/*",
+        "*://pixel.facebook.com/*",
+        "*://staticxx.facebook.com/*",
+        "*://www.facebook.com/tr*",
+        "*://www.facebook.com/tr/*",
+        "*://pixel.quantcount.com/*",
+        "*://pixel.quantserve.com/*",
+        "*://segment.quantserve.com/*",
+        "*://rules.quantcount.com/*",
+        "*://pixel.adsafeprotected.com/*",
+        "*://static.adsafeprotected.com/*",
+        "*://fw.adsafeprotected.com/*",
+        "*://data.adsafeprotected.com/*",
+        "*://dt.adsafeprotected.com/*",
+        "*://cdn.doubleverify.com/*",
+        "*://rtb.doubleverify.com/*",
+        "*://pixel.doubleverify.com/*",
+        "*://tps.doubleverify.com/*",
+        "*://cdn3.doubleverify.com/*",
+        "*://cdn.krxd.net/*",
+        "*://beacon.krxd.net/*",
+        "*://consumer.krxd.net/*",
+        "*://usermatch.krxd.net/*",
+        "*://apiservices.krxd.net/*",
+        "*://pixel.everesttech.net/*",
+        "*://dsum-sec.casalemedia.com/*",
+        "*://ssum-sec.casalemedia.com/*",
+        "*://ssum.casalemedia.com/*",
+        "*://pixel.rubiconproject.com/*",
+        "*://fastlane.rubiconproject.com/*",
+        "*://optimized-by.rubiconproject.com/*",
+        "*://prebid-server.rubiconproject.com/*",
+        "*://token.rubiconproject.com/*",
+        "*://geo.moatads.com/*",
+        "*://px.moatads.com/*",
+        "*://js.moatads.com/*",
+        "*://mb.moatads.com/*",
+        "*://pixel.moatads.com/*",
+        "*://s.pubmine.com/*",
+        "*://ad.turn.com/*",
+        "*://d.turn.com/*",
+        "*://r.turn.com/*",
+        "*://rpm.turn.com/*",
+        "*://cm.g.doubleclick.net/*",
+        "*://simage2.pubmatic.com/*",
+        "*://image2.pubmatic.com/*",
+        "*://image4.pubmatic.com/*",
+        "*://image6.pubmatic.com/*",
+        "*://hbopenbid.pubmatic.com/*",
+        "*://ads.pubmatic.com/*",
+        "*://t.pubmatic.com/*",
+        "*://ow.pubmatic.com/*",
+        "*://us-u.openx.net/*",
+        "*://uk-ads.openx.net/*",
+        "*://rtb.openx.net/*",
+        "*://u.openx.net/*",
+        "*://usermatch.openx.com/*",
+        "*://delivery.adnuntius.com/*",
+        "*://data.adnuntius.com/*",
+        "*://adnuntius.com/*",          "*://*.adnuntius.com/*",
+        "*://ads.bridgewell.com/*",     "*://*.bridgewell.com/*",
+        "*://tg1.clevertap-prod.com/*",
+        "*://wzrkt.com/*",              "*://*.wzrkt.com/*",
+        "*://cdn.concert.io/*",         "*://concert.io/*",
+        "*://bam-cell.nr-data.net/*",
+        "*://securepubads.g.doubleclick.net/*",
+        "*://eus.rubiconproject.com/*",
+        "*://idsync.rlcdn.com/*",
+        "*://p.adsymptotic.com/*",
+        "*://static.cloudflareinsights.com/*",
+        "*://cdn.speedcurve.com/*",
+        "*://cdn.segment.com/*",
+        "*://api.segment.io/*",
+        "*://cdn.heapanalytics.com/*",
+        "*://heapanalytics.com/*",
+        "*://cdn-3.convertexperiments.com/*",
+        "*://cdn.mxpnl.com/*",
+        "*://api-js.mixpanel.com/*",
+        "*://decide.mixpanel.com/*",
+        "*://bat.bing.com/*",
+        "*://c.bing.com/*",
+        "*://bat.r.msn.com/*",
+        "*://a.clarity.ms/*",
+        "*://c.clarity.ms/*",
+        "*://d.clarity.ms/*",
+        "*://js.monitor.azure.com/*",
+        "*://cdn.cookielaw.org/*",
+        "*://geolocation.onetrust.com/*",
+        "*://privacyportal.onetrust.com/*",
+        "*://optanon.blob.core.windows.net/*",
+        "*://consent.cookiebot.com/*",
+        "*://consentcdn.cookiebot.com/*",
+        "*://cdn.privacy-mgmt.com/*",
+        "*://wrapper.sp-prod.net/*",
+        "*://sourcepoint.mgr.consensu.org/*",
+        "*://quantcast.mgr.consensu.org/*",
+        "*://cmpv2.mgr.consensu.org/*",
+        "*://vendorlist.consensu.org/*",
+
+        // ── More d3ward domains (additional categories) ──────────────────
+        "*://s.pinimg.com/*",
+        "*://ct.pinterest.com/*",
+        "*://widgets.pinterest.com/*",
+        "*://log.pinterest.com/*",
+        "*://trk.pinterest.com/*",
+        "*://assets.pinterest.com/*",
+        "*://api.amplitude.com/*",
+        "*://cdn.amplitude.com/*",
+        "*://api2.amplitude.com/*",
+        "*://static.hotjar.com/*",
+        "*://vars.hotjar.com/*",
+        "*://vc.hotjar.io/*",
+        "*://in.hotjar.com/*",
+        "*://ws.hotjar.com/*",
+        "*://t.clarity.ms/*",
+
+        // ── Broader wildcard patterns ──────────────────────────────────
+        "*://*.adnxs.com/*",
+        "*://*.adsrvr.org/*",
+        "*://*.bidswitch.net/*",
+        "*://*.casalemedia.com/*",
+        "*://*.demdex.net/*",
+        "*://*.doubleclick.net/*",
+        "*://*.everesttech.net/*",
+        "*://*.krxd.net/*",
+        "*://*.moatads.com/*",
+        "*://*.openx.net/*",
+        "*://*.pubmatic.com/*",
+        "*://*.quantserve.com/*",
+        "*://*.rubiconproject.com/*",
+        "*://*.scorecardresearch.com/*",
+        "*://*.serving-sys.com/*",
+        "*://*.turn.com/*",
+        "*://*.2mdn.net/*",
+        "*://*.adsafeprotected.com/*",
+        "*://*.doubleverify.com/*",
+        "*://*.mathtag.com/*",
+        "*://*.nr-data.net/*",
+        "*://*.sentry-cdn.com/*",
+        "*://*.sentry.io/*",
+        "*://*.amplitude.com/*",
+        "*://*.clarity.ms/*",
+        "*://*.segment.io/*",
+        "*://*.segment.com/*",
+        "*://*.mixpanel.com/*",
+        "*://*.heapanalytics.com/*",
     ];
 
     private string GetAdBlockerEarlyScript()
     {
         if (!_settings.AdBlockerEnabled) return "void 0;";
-        // Load external adblocker script from renderer\adblocker_early.js to avoid huge embedded verbatim string
-        var exeDir = AppDomain.CurrentDomain.BaseDirectory;
-        var jsPath = IoPath.Combine(exeDir, "renderer", "adblocker_early.js");
+        var jsPath = IoPath.Combine(RendererPath, "adblocker_early.js");
         try
         {
             if (File.Exists(jsPath)) return File.ReadAllText(jsPath);
         }
         catch { }
-        // Fallback: no-op script if file missing
         return "(function(){ /* adblocker script unavailable */ })();\n";
     }
 
+
+    private Task<CoreWebView2Environment> CreateWebViewEnvironment(string dataFolder)
+    {
+        var options = new CoreWebView2EnvironmentOptions();
+        return CoreWebView2Environment.CreateAsync(null, dataFolder, options);
     }
-
-
-    private static Task<CoreWebView2Environment> CreateWebViewEnvironment(string dataFolder)
-        => CoreWebView2Environment.CreateAsync(null, dataFolder);
 
     private void SetupAdBlockerNetwork(WebView2 webView)
     {
@@ -3909,117 +4471,130 @@ public partial class MainWindow : Window
             var pageUrl = webView.Source?.ToString() ?? "";
             if (Uri.TryCreate(pageUrl, UriKind.Absolute, out var pageUri) &&
                 _adBlockDisabledSites.Contains(pageUri.Host)) return;
-            e.Response = _webViewEnvironment!.CreateWebResourceResponse(null, 200, "OK", "");
+            e.Response = _webViewEnvironment!.CreateWebResourceResponse(null, 403, "Blocked", "Access-Control-Allow-Origin: *");
         };
     }
 
     private static string GetAdBlockerScript() => @"
 (function() {
   'use strict';
-  // Ad selectors: Google Ads, common ad networks, generic ad containers
+  if (window.__ycbAdBlockCosmetic) return;
+  window.__ycbAdBlockCosmetic = true;
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // COMPREHENSIVE AD SELECTOR LIST
+  // ═══════════════════════════════════════════════════════════════════════════
   var AD_SELECTORS = [
-    'ins.adsbygoogle',
-    'ins[data-ad-client]',
-    'ins[data-ad-slot]',
-    '#google_ads_iframe_0',
-    '[id^=""google_ads_iframe""]',
-    '[id^=""google_ads_frame""]',
-    '[id^=""aswift_""]',
-    '[id^=""ad-""]',
-    '[id^=""ads-""]',
-    '[id$=""-ad""]',
-    '[id$=""-ads""]',
-    '[id=""ad""]',
-    '[id=""ads""]',
-    '[id=""advert""]',
-    '[id=""advertisement""]',
-    '[id=""ad-container""]',
-    '[id=""ad-wrapper""]',
-    '[id=""ad-banner""]',
-    '[id=""ad-unit""]',
-    '.adsbygoogle',
-    '.google-ad',
-    '.google-ads',
-    '.GoogleActiveViewElement',
-    '.ad-container',
-    '.ad-wrapper',
-    '.ad-banner',
-    '.ad-unit',
-    '.ad-slot',
-    '.ad-zone',
-    '.advertisement',
-    '.advertisement-block',
-    '.advert',
-    '.adverts',
-    '.sponsor-label',
-    '[data-ad-unit]',
-    '[data-ad-slot]',
-    '[data-ad-client]',
-    '[data-google-query-id]',
-    'iframe[src*=""googlesyndication.com""]',
-    'iframe[src*=""doubleclick.net""]',
-    'iframe[src*=""googleadservices.com""]',
-    'iframe[src*=""adnxs.com""]',
-    'iframe[src*=""amazon-adsystem.com""]',
-    'iframe[src*=""ads.yahoo.com""]',
-    'iframe[src*=""yieldmo.com""]',
-    'iframe[src*=""criteo.com""]',
-    'iframe[src*=""taboola.com""]',
-    'iframe[src*=""outbrain.com""]',
-    'iframe[src*=""revcontent.com""]',
-    'script[src*=""googlesyndication.com""]',
-    'script[src*=""doubleclick.net""]',
-    'div[id^=""taboola-""]',
-    'div[id^=""outbrain-""]',
-    '.taboola', '.outbrain', '.OUTBRAIN',
-    // Cosmetic filter classes (turtlecute test)
-    '.textads', '.banner-ads', '.banner_ads', '.afs_ads', '.ad-space', '.adsbox',
-    '#cts_test', '#ad_ctd',
-    // Flash / plugin ad objects — hide even when file is blocked (no onerror on <object>/<embed>)
-    'object[type*=""shockwave""]', 'embed[type*=""shockwave""]',
-    'object[type*=""flash""]',    'embed[type*=""flash""]',
-    'object[data*=""banner""]',   'embed[src*=""banner""]',
-    'object[data*=""/ads/""]',    'embed[src*=""/ads/""]',
-    'object[data*=""advertising""]', 'embed[src*=""advertising""]',
-    'object[data*=""advert""]',   'embed[src*=""advert""]'
+    // Google Ads
+    'ins.adsbygoogle','ins[data-ad-client]','ins[data-ad-slot]',
+    '[id^=""google_ads_iframe""]','[id^=""google_ads_frame""]','[id^=""aswift_""]',
+    '.adsbygoogle','.google-ad','.google-ads','.GoogleActiveViewElement',
+    '[data-google-query-id]','[data-ad-unit]','[data-ad-slot]','[data-ad-client]',
+    'script[src*=""googlesyndication.com""]','script[src*=""doubleclick.net""]',
+    'iframe[src*=""googlesyndication.com""]','iframe[src*=""doubleclick.net""]',
+    'iframe[src*=""googleadservices.com""]','iframe[src*=""adnxs.com""]',
+    'iframe[src*=""amazon-adsystem.com""]','iframe[src*=""taboola.com""]',
+    'iframe[src*=""outbrain.com""]','iframe[src*=""criteo.com""]',
+    'iframe[src*=""ads.yahoo.com""]','iframe[src*=""yieldmo.com""]',
+    // Generic ad containers
+    '#ad','#ads','#advert','#advertisement',
+    '#ad-container','#ad-wrapper','#ad-banner','#ad-unit','#banner-ad',
+    '[id^=""ad-""]','[id^=""ads-""]','[id$=""-ad""]','[id$=""-ads""]',
+    '.ad-container','.ad-wrapper','.ad-banner','.ad-unit','.ad-slot','.ad-zone',
+    '.advertisement','.advertisement-block','.advert','.adverts','.sponsor-label',
+    '.ad-space','.adsbox','.textads','.banner-ads','.banner_ads','.afs_ads',
+    // Taboola/Outbrain/Revcontent
+    'div[id^=""taboola-""]','div[id^=""outbrain-""]','.taboola','.outbrain','.OUTBRAIN',
+    '[class*=""taboola""]','[class*=""outbrain""]','[class*=""revcontent""]',
+    // Native ad selectors
+    '[class*=""sponsored""]','[class*=""Sponsored""]',
+    '[data-testid*=""ad""]','[data-ad]','[data-ads]',
+    // AMP ads
+    'amp-ad','amp-embed','amp-sticky-ad',
+    // Video ads
+    '.video-ad','.video-ads','[class*=""preroll""]','[class*=""midroll""]',
+    // Flash/plugin
+    'object[type*=""shockwave""]','embed[type*=""shockwave""]',
+    'object[type*=""flash""]','embed[type*=""flash""]',
+    'object[data*=""banner""]','embed[src*=""banner""]',
+    'object[data*=""/ads/""]','embed[src*=""/ads/""]',
+    // Test-specific
+    '#cts_test','#ad_ctd',
+    // YouTube ads
+    'ytd-promoted-sparkles-web-renderer','ytd-promoted-video-renderer',
+    'ytd-display-ad-renderer','ytd-companion-slot-renderer',
+    'ytd-action-companion-ad-renderer','ytd-in-feed-ad-layout-renderer',
+    'ytd-ad-slot-renderer','ytd-banner-promo-renderer',
+    '#masthead-ad','#player-ads',
+    '.ytp-ad-overlay-container','.ytp-ad-text-overlay',
+    'tp-yt-paper-dialog.ytd-popup-container',
+    // Social media feed ads
+    '[data-testid=""placementTracking""]',
+    'article[data-promoted]','[class*=""promoted-tweet""]',
+    // Common newsletter/signup popups that look like ads
+    '.newsletter-popup','.popup-overlay','[class*=""exit-intent""]'
   ].join(',');
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // REMOVE ADS
+  // ═══════════════════════════════════════════════════════════════════════════
+  var _removed = 0;
 
   function removeAds(root) {
     try {
-      root.querySelectorAll(AD_SELECTORS).forEach(function(el) {
-        try { el.remove(); } catch(e) {}
-      });
+      var els = root.querySelectorAll(AD_SELECTORS);
+      for (var i = 0; i < els.length; i++) {
+        try { els[i].remove(); _removed++; } catch(e) {}
+      }
     } catch(e) {}
   }
 
-  // Run immediately
   removeAds(document);
 
-  // Watch for dynamically injected ads
-  var observer = new MutationObserver(function(mutations) {
-    mutations.forEach(function(m) {
-      m.addedNodes.forEach(function(node) {
-        if (node.nodeType === 1) {
-          try {
-            if (node.matches && node.matches(AD_SELECTORS)) {
-              node.remove();
-            } else {
-              removeAds(node);
-            }
-          } catch(e) {}
-        }
-      });
+  // ═══════════════════════════════════════════════════════════════════════════
+  // MUTATION OBSERVER — catch dynamically injected ads
+  // ═══════════════════════════════════════════════════════════════════════════
+  var _pendingCheck = false;
+  function scheduleAdCheck() {
+    if (_pendingCheck) return;
+    _pendingCheck = true;
+    requestAnimationFrame(function() {
+      _pendingCheck = false;
+      removeAds(document);
+      hideAdImages(document);
     });
-  });
+  }
 
-  observer.observe(document.documentElement, { childList: true, subtree: true });
+  new MutationObserver(function(mutations) {
+    var dominated = false;
+    for (var i = 0; i < mutations.length; i++) {
+      var added = mutations[i].addedNodes;
+      for (var j = 0; j < added.length; j++) {
+        var node = added[j];
+        if (node.nodeType !== 1) continue;
+        try {
+          if (node.matches && node.matches(AD_SELECTORS)) {
+            node.remove(); _removed++;
+          } else if (node.querySelectorAll) {
+            var inner = node.querySelectorAll(AD_SELECTORS);
+            for (var k = 0; k < inner.length; k++) {
+              try { inner[k].remove(); _removed++; } catch(e) {}
+            }
+          }
+        } catch(e) { dominated = true; }
+      }
+    }
+    if (dominated) scheduleAdCheck();
+  }).observe(document.documentElement, { childList: true, subtree: true });
 
-  // Collapse ad element AND its parent container if it becomes empty
+  // ═══════════════════════════════════════════════════════════════════════════
+  // COLLAPSE AD ELEMENTS & EMPTY PARENTS
+  // ═══════════════════════════════════════════════════════════════════════════
   var HIDE_CSS = ';display:none!important;visibility:hidden!important;height:0!important;min-height:0!important;overflow:hidden!important;max-height:0!important;';
+
   function collapseAdElement(el) {
     try {
       el.style.cssText += HIDE_CSS;
-      // Walk up and collapse empty parents (up to 4 levels)
       var parent = el.parentElement;
       for (var i = 0; i < 4 && parent && parent !== document.body && parent !== document.documentElement; i++) {
         var hasVisible = false;
@@ -4037,18 +4612,27 @@ public partial class MainWindow : Window
     } catch(e) {}
   }
 
-  // Hide images loaded from ad-related paths (banner image ads)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // HIDE AD IMAGES & TRACKING PIXELS
+  // ═══════════════════════════════════════════════════════════════════════════
   var AD_IMG_RE = /[/?=](ads?|advert(?:isement)?|banner|bnr|sponsor|promo|adserver|adimg)[/?=.]|\/(ads?|banners?|advertisements?|sponsors?|adserver|adimages?)\//i;
+
   function isAdSrc(src) { return src && (AD_IMG_RE.test(src) || /\/banners?\//i.test(src)); }
 
   function processImage(img) {
     var src = img.src || img.getAttribute('data-src') || '';
     if (isAdSrc(src)) collapseAdElement(img);
+    // Collapse 1x1 tracking pixels
+    if (img.naturalWidth <= 1 && img.naturalHeight <= 1 && src && src.indexOf('http') === 0) {
+      collapseAdElement(img);
+    }
   }
+
   function processPlugin(el) {
     var src = el.data || el.src || el.getAttribute('data') || el.getAttribute('src') || '';
     if (isAdSrc(src) || /shockwave|flash/i.test(el.type || '')) collapseAdElement(el);
   }
+
   function hideAdImages(root) {
     try {
       root.querySelectorAll('img[src],img[data-src]').forEach(processImage);
@@ -4056,11 +4640,11 @@ public partial class MainWindow : Window
     } catch(e) {}
   }
 
-  // Collapse when blocked image errors or loads with no content
+  // Error handler for blocked resources
   document.addEventListener('error', function(e) {
     try {
       var t = e.target;
-      if (t && (t.tagName === 'IMG' || t.tagName === 'EMBED' || t.tagName === 'OBJECT')) {
+      if (t && (t.tagName === 'IMG' || t.tagName === 'EMBED' || t.tagName === 'OBJECT' || t.tagName === 'IFRAME')) {
         var src = t.src || t.data || t.getAttribute('data') || '';
         if (isAdSrc(src)) collapseAdElement(t);
       }
@@ -4073,13 +4657,13 @@ public partial class MainWindow : Window
       if (t && t.tagName === 'IMG') {
         var src = t.src || '';
         if (isAdSrc(src) && t.naturalWidth === 0 && t.naturalHeight === 0) collapseAdElement(t);
-        // Also collapse 1x1 tracking pixels
         if (t.naturalWidth <= 1 && t.naturalHeight <= 1 && src) collapseAdElement(t);
       }
     } catch(ex) {}
   }, true);
 
   hideAdImages(document);
+
   new MutationObserver(function(muts) {
     muts.forEach(function(m) {
       m.addedNodes.forEach(function(n) {
@@ -4092,18 +4676,94 @@ public partial class MainWindow : Window
     });
   }).observe(document.documentElement, { childList: true, subtree: true });
 
-  // Inject CSS — hide Flash/plugin objects and ad containers early
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STICKY / FIXED POSITION AD DETECTION (the annoying overlays)
+  // ═══════════════════════════════════════════════════════════════════════════
+  function removeFixedAds() {
+    try {
+      var allFixed = document.querySelectorAll('[style*=""position: fixed""], [style*=""position:fixed""]');
+      for (var i = 0; i < allFixed.length; i++) {
+        var el = allFixed[i];
+        // Skip elements that are clearly navigation/headers
+        if (el.tagName === 'NAV' || el.tagName === 'HEADER') continue;
+        if (el.id === 'navbar' || el.id === 'header' || el.id === 'nav') continue;
+        if (el.classList.contains('navbar') || el.classList.contains('header') || el.classList.contains('nav')) continue;
+        // Check if it contains ad-related content
+        var html = el.innerHTML || '';
+        var txt = el.textContent || '';
+        if (/googlesyndication|doubleclick|adsbygoogle|taboola|outbrain|sponsored/i.test(html) ||
+            /close.{0,5}ad|dismiss|accept.*cookie|cookie.*accept/i.test(txt)) {
+          el.remove(); _removed++;
+        }
+        // Check iframes inside
+        var iframes = el.querySelectorAll('iframe');
+        for (var j = 0; j < iframes.length; j++) {
+          var iSrc = iframes[j].src || '';
+          if (/googlesyndication|doubleclick|adnxs|taboola|outbrain|criteo/i.test(iSrc)) {
+            el.remove(); _removed++;
+            break;
+          }
+        }
+      }
+    } catch(e) {}
+  }
+
+  setTimeout(removeFixedAds, 2000);
+  setTimeout(removeFixedAds, 5000);
+  setTimeout(removeFixedAds, 10000);
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ANTI-ADBLOCK DETECTION BYPASS
+  // ═══════════════════════════════════════════════════════════════════════════
+  try {
+    // Create a fake adsbygoogle element that passes detection checks
+    var fakeAd = document.createElement('ins');
+    fakeAd.className = 'adsbygoogle';
+    fakeAd.style.cssText = 'display:block!important;position:absolute!important;left:-9999px!important;top:-9999px!important;width:1px!important;height:1px!important;overflow:hidden!important;';
+    (document.body || document.documentElement).appendChild(fakeAd);
+  } catch(e) {}
+
+  // Override ad-detect functions that check offsetHeight
+  try {
+    var _origGetBCR = Element.prototype.getBoundingClientRect;
+    Element.prototype.getBoundingClientRect = function() {
+      var result = _origGetBCR.call(this);
+      // If this is a hidden adblock detection element, return fake dimensions
+      if (this.classList && (this.classList.contains('adsbygoogle') || this.classList.contains('adsbox') ||
+          this.id === 'ad-test' || this.id === 'detect-adb')) {
+        if (result.height === 0) {
+          return { top: result.top, left: result.left, bottom: result.top + 1, right: result.left + 1,
+                   width: 1, height: 1, x: result.x, y: result.y };
+        }
+      }
+      return result;
+    };
+  } catch(e) {}
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // INJECT HIDE CSS for faster paint
+  // ═══════════════════════════════════════════════════════════════════════════
   try {
     var style = document.createElement('style');
     style.textContent =
       'object[type*=""shockwave""],object[type*=""flash""],embed[type*=""shockwave""],embed[type*=""flash""],' +
       'object[data*=""banner""],embed[src*=""banner""],object[data*=""/ads/""],embed[src*=""/ads/""],' +
-      'object[data*=""advertising""],embed[src*=""advertising""],' +
       '#ad,#ads,#advert,#advertisement,#ad-container,#ad-wrapper,#ad-banner,#ad-unit,#banner-ad,' +
-      '[id^=""ad-""][id*=""banner""],[class*=""ad-banner""],[class*=""banner-ad""]' +
-      '{display:none!important;height:0!important;min-height:0!important;visibility:hidden!important;overflow:hidden!important;}';
+      '[id^=""ad-""][id*=""banner""],[class*=""ad-banner""],[class*=""banner-ad""],' +
+      '.ad-container,.ad-wrapper,.ad-banner,.ad-unit,.ad-slot,' +
+      'ins.adsbygoogle,amp-ad,amp-embed,amp-sticky-ad,' +
+      'ytd-promoted-sparkles-web-renderer,ytd-promoted-video-renderer,' +
+      'ytd-display-ad-renderer,ytd-ad-slot-renderer,#masthead-ad,#player-ads,' +
+      '.ytp-ad-overlay-container,.ytp-ad-text-overlay' +
+      '{display:none!important;height:0!important;min-height:0!important;' +
+      'visibility:hidden!important;overflow:hidden!important;max-height:0!important;}';
     (document.head || document.documentElement).appendChild(style);
   } catch(e) {}
+
+  // Log count
+  setTimeout(function() {
+    if (_removed > 0) console.log('[YCB AdBlock] Removed ' + _removed + ' ad elements');
+  }, 3000);
 })();
 ";
 
@@ -4151,26 +4811,184 @@ public partial class MainWindow : Window
     
     private void AddCopilotMessage(string message, bool isUser)
     {
-        var border = new Border
+        var bubble = new Border
         {
-            Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(isUser ? "#1e3a5f" : "#24263a")!),
+            Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(
+                isUser ? (_isDarkMode ? "#1e3a5f" : "#dbeafe") : (_isDarkMode ? "#24263a" : "#f1f3f6"))!),
             CornerRadius = new CornerRadius(isUser ? 14 : 14, isUser ? 14 : 14, isUser ? 3 : 14, isUser ? 14 : 3),
             Padding = new Thickness(13, 10, 13, 10),
-            Margin = new Thickness(isUser ? 40 : 0, 5, isUser ? 0 : 40, 5),
+            Margin = new Thickness(isUser ? 36 : 0, 5, isUser ? 0 : 36, 5),
             HorizontalAlignment = isUser ? HorizontalAlignment.Right : HorizontalAlignment.Left,
-            MaxWidth = 280
+            MaxWidth = 290
         };
-        
-        border.Child = new TextBlock
+
+        if (isUser)
         {
-            Text = message,
-            Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(isUser ? "#cce3ff" : "#e8eaed")!),
-            TextWrapping = TextWrapping.Wrap,
-            FontSize = 13
-        };
+            bubble.Child = new TextBlock
+            {
+                Text = message,
+                Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(
+                    _isDarkMode ? "#cce3ff" : "#1a3a6b")!),
+                TextWrapping = TextWrapping.Wrap,
+                FontSize = 13
+            };
+        }
+        else
+        {
+            bubble.Child = BuildAssistantMessageUI(message);
+        }
         
-        MessagesPanel.Children.Add(border);
+        MessagesPanel.Children.Add(bubble);
         CopilotMessages.ScrollToEnd();
+    }
+
+    // Renders assistant messages with code block support (``` ... ```)
+    private FrameworkElement BuildAssistantMessageUI(string text)
+    {
+        bool dark = _isDarkMode;
+        string textColor  = dark ? "#e8eaed" : "#202124";
+        string codeBg     = dark ? "#0d1117"  : "#f6f8fa";
+        string codeBorder = dark ? "#30363d"  : "#d0d7de";
+        string codeText   = dark ? "#e6edf3"  : "#24292f";
+        string copyBg     = dark ? "#21262d"  : "#f0f3f6";
+        string copyFg     = dark ? "#8b949e"  : "#57606a";
+        string copyBd     = dark ? "#30363d"  : "#d0d7de";
+
+        // Split on triple-backtick code fences
+        var parts = System.Text.RegularExpressions.Regex.Split(text, @"```(?:\w+)?");
+        
+        // Outer container with copy-all button at bottom
+        var outer = new StackPanel { Orientation = Orientation.Vertical };
+
+        if (parts.Length <= 1)
+        {
+            // No code blocks — plain text with selectable TextBox
+            outer.Children.Add(MakeSelectableText(text, textColor));
+        }
+        else
+        {
+            for (int i = 0; i < parts.Length; i++)
+            {
+                if (string.IsNullOrEmpty(parts[i])) continue;
+                if (i % 2 == 0)
+                {
+                    var segment = parts[i].Trim('\r', '\n');
+                    if (!string.IsNullOrWhiteSpace(segment))
+                        outer.Children.Add(MakeSelectableText(segment, textColor));
+                }
+                else
+                {
+                    // Code block
+                    var code = parts[i].Trim('\r', '\n');
+                    var codeBorderEl = new Border
+                    {
+                        Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(codeBg)!),
+                        CornerRadius = new CornerRadius(8),
+                        Padding = new Thickness(12, 8, 12, 10),
+                        Margin = new Thickness(0, 6, 0, 6),
+                        BorderBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(codeBorder)!),
+                        BorderThickness = new Thickness(1)
+                    };
+                    var codePanel = new StackPanel();
+                    // Copy button row
+                    var copyRow = new Grid();
+                    copyRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                    copyRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                    var copyBtn = new Button
+                    {
+                        Content = "Copy",
+                        Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(copyBg)!),
+                        Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(copyFg)!),
+                        BorderBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(copyBd)!),
+                        BorderThickness = new Thickness(1),
+                        FontSize = 11,
+                        Padding = new Thickness(8, 3, 8, 3),
+                        Cursor = Cursors.Hand,
+                        Tag = code
+                    };
+                    copyBtn.Click += (s, _) => {
+                        try
+                        {
+                            Clipboard.SetText((string)((Button)s).Tag);
+                            ((Button)s).Content = "Copied!";
+                            var t = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(1.5) };
+                            t.Tick += (_, __) => { ((Button)s).Content = "Copy"; t.Stop(); };
+                            t.Start();
+                        }
+                        catch { }
+                    };
+                    Grid.SetColumn(copyBtn, 1);
+                    copyRow.Children.Add(copyBtn);
+                    codePanel.Children.Add(copyRow);
+                    var codeText2 = new TextBox
+                    {
+                        Text = code,
+                        Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(codeText)!),
+                        Background = System.Windows.Media.Brushes.Transparent,
+                        BorderThickness = new Thickness(0),
+                        FontFamily = new System.Windows.Media.FontFamily("Cascadia Code, Consolas, Courier New"),
+                        FontSize = 12,
+                        TextWrapping = TextWrapping.Wrap,
+                        Margin = new Thickness(0, 6, 0, 0),
+                        IsReadOnly = true,
+                        Padding = new Thickness(0),
+                        CaretBrush = System.Windows.Media.Brushes.Transparent
+                    };
+                    codePanel.Children.Add(codeText2);
+                    codeBorderEl.Child = codePanel;
+                    outer.Children.Add(codeBorderEl);
+                }
+            }
+        }
+
+        // "Copy message" button at bottom right
+        var msgCopyGrid = new Grid { Margin = new Thickness(0, 4, 0, 0) };
+        msgCopyGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        msgCopyGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        var msgCopyBtn = new Button
+        {
+            Content = "📋 Copy",
+            Background = System.Windows.Media.Brushes.Transparent,
+            Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(dark ? "#9aa0a6" : "#5f6368")!),
+            BorderThickness = new Thickness(0),
+            FontSize = 11,
+            Padding = new Thickness(6, 2, 6, 2),
+            Cursor = Cursors.Hand,
+            Tag = text
+        };
+        msgCopyBtn.Click += (s, _) => {
+            try
+            {
+                Clipboard.SetText((string)((Button)s).Tag);
+                ((Button)s).Content = "✅ Copied!";
+                var t = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(1.5) };
+                t.Tick += (_, __) => { ((Button)s).Content = "📋 Copy"; t.Stop(); };
+                t.Start();
+            }
+            catch { }
+        };
+        Grid.SetColumn(msgCopyBtn, 1);
+        msgCopyGrid.Children.Add(msgCopyBtn);
+        outer.Children.Add(msgCopyGrid);
+
+        return outer;
+    }
+
+    private static FrameworkElement MakeSelectableText(string text, string color)
+    {
+        return new TextBox
+        {
+            Text = text,
+            Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(color)!),
+            Background = System.Windows.Media.Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            TextWrapping = TextWrapping.Wrap,
+            FontSize = 13,
+            IsReadOnly = true,
+            Padding = new Thickness(0),
+            CaretBrush = System.Windows.Media.Brushes.Transparent,
+            Margin = new Thickness(0, 2, 0, 2)
+        };
     }
     
     private void Menu_Click(object sender, RoutedEventArgs e)
@@ -4196,6 +5014,117 @@ public partial class MainWindow : Window
         OpenIncognitoWindow();
     }
     
+    private void MenuBookmarks_Click(object sender, RoutedEventArgs e)
+    {
+        MenuPopup.IsOpen = false;
+        RefreshBookmarksPopup();
+        BookmarksPopup.IsOpen = true;
+    }
+
+    private void RefreshBookmarksPopup()
+    {
+        // Pre-fill name with current page title
+        var title = _activeTabIndex >= 0 && _activeTabIndex < _tabs.Count
+            ? _tabs[_activeTabIndex].Title ?? ""
+            : "";
+        BookmarkNameBox.Text = title;
+
+        // Populate bookmarks list
+        BookmarksList.Children.Clear();
+        var bookmarks = LoadBookmarks();
+        if (!bookmarks.Any())
+        {
+            BookmarksList.Children.Add(new TextBlock
+            {
+                Text = "No bookmarks saved yet.",
+                Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#9aa0a6")!),
+                FontSize = 12,
+                Margin = new Thickness(0, 2, 0, 2)
+            });
+            return;
+        }
+
+        for (int i = 0; i < bookmarks.Count; i++)
+        {
+            var bm = bookmarks[i];
+            var idx = i;
+            var row = new Grid { Margin = new Thickness(0, 2, 0, 2) };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            var nameBtn = new Button
+            {
+                Content = new TextBlock
+                {
+                    Text = bm.Label ?? bm.Title ?? bm.Url,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                    Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#e8eaed")!),
+                    FontSize = 13
+                },
+                Background = Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                Padding = new Thickness(4, 5, 4, 5),
+                HorizontalContentAlignment = HorizontalAlignment.Left,
+                Cursor = Cursors.Hand,
+                ToolTip = bm.Url
+            };
+            nameBtn.Click += (s, ev) =>
+            {
+                BookmarksPopup.IsOpen = false;
+                if (_activeTabIndex >= 0 && _activeTabIndex < _tabs.Count)
+                    _tabs[_activeTabIndex].WebView.CoreWebView2.Navigate(bm.Url);
+            };
+            Grid.SetColumn(nameBtn, 0);
+
+            var delBtn = new Button
+            {
+                Content = new TextBlock
+                {
+                    Text = "✕",
+                    Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#9aa0a6")!),
+                    FontSize = 11
+                },
+                Background = Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                Padding = new Thickness(6, 5, 6, 5),
+                Cursor = Cursors.Hand,
+                ToolTip = "Remove bookmark"
+            };
+            delBtn.Click += (s, ev) =>
+            {
+                RemoveBookmark(idx);
+                RefreshBookmarkStar();
+                RefreshBookmarksPopup();
+            };
+            Grid.SetColumn(delBtn, 1);
+
+            row.Children.Add(nameBtn);
+            row.Children.Add(delBtn);
+            BookmarksList.Children.Add(row);
+        }
+    }
+
+    private void BookmarkSaveBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (_activeTabIndex < 0 || _activeTabIndex >= _tabs.Count) return;
+        var url = _tabs[_activeTabIndex].Url ?? "";
+        if (string.IsNullOrEmpty(url) || url.StartsWith("ycb://")) return;
+
+        var name = BookmarkNameBox.Text.Trim();
+        if (string.IsNullOrEmpty(name))
+            name = _tabs[_activeTabIndex].Title ?? url;
+
+        var bookmarks = LoadBookmarks();
+        var existing = bookmarks.FindIndex(b => b.Url == url);
+        if (existing >= 0)
+            RemoveBookmark(existing);
+        else
+            AddBookmark(url, name);
+
+        RefreshBookmarkStar();
+        RefreshBookmarksPopup();
+    }
+
     private async void MenuHistory_Click(object sender, RoutedEventArgs e)
     {
         MenuPopup.IsOpen = false;
@@ -4223,7 +5152,75 @@ public partial class MainWindow : Window
     private void MenuSupport_Click(object sender, RoutedEventArgs e)
     {
         MenuPopup.IsOpen = false;
-        _ = CreateTab("ycb://support");
+        _ = CreateTab("https://ycb.tomcreations.org/auth/login?next=/support");
+    }
+
+    // Maps a live file:// URL back to its ycb:// equivalent so internal pages survive reload
+    private string GetReloadUrl(BrowserTab tab)
+    {
+        // Try live source first
+        var live = tab.WebView.Source?.ToString();
+        if (!string.IsNullOrEmpty(live) && live.StartsWith("file:///"))
+        {
+            if (live.Contains("settings.html"))  return "ycb://settings";
+            if (live.Contains("history.html"))   return "ycb://history";
+            if (live.Contains("downloads.html")) return "ycb://downloads";
+            if (live.Contains("passwords.html")) return "ycb://passwords";
+            if (live.Contains("guide.html"))     return "ycb://guide";
+            if (live.Contains("support.html"))   return "ycb://support";
+            if (live.Contains("newtab.html"))    return "ycb://newtab";
+        }
+        if (!string.IsNullOrEmpty(live) &&
+            (live.StartsWith("http://") || live.StartsWith("https://")))
+            return live;
+        // Fall back to stored URL
+        var stored = tab.Url ?? "";
+        if (stored.StartsWith("ycb://") || stored.StartsWith("http://") || stored.StartsWith("https://"))
+            return stored;
+        return "ycb://newtab";
+    }
+
+    private async Task TrySilentSupportLogin(WebView2 webView)
+    {
+        try
+        {
+            var userId = ErrorReporter.UserId;
+            if (string.IsNullOrEmpty(userId))
+            {
+                System.Diagnostics.Debug.WriteLine("[SilentLogin] No user ID available, skipping.");
+                return;
+            }
+
+            var safeId = userId.Replace("\\", "\\\\").Replace("'", "\\'");
+            System.Diagnostics.Debug.WriteLine($"[SilentLogin] POSTing user ID to /auth/ycbuseridlogin");
+
+            // Run fetch from within the page's own origin so the browser
+            // handles Set-Cookie automatically — no manual cookie injection needed
+            var js = $@"
+(function() {{
+    console.log('[YCB SilentLogin] Starting POST for user: {safeId}');
+    fetch('/auth/ycbuseridlogin', {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/x-www-form-urlencoded' }},
+        body: 'ycb_user_id={safeId}',
+        credentials: 'include',
+        redirect: 'follow'
+    }}).then(function(r) {{
+        console.log('[YCB SilentLogin] Response status: ' + r.status + ' url: ' + r.url);
+        window.location.href = '/support';
+    }}).catch(function(err) {{
+        console.error('[YCB SilentLogin] Fetch error: ' + err);
+        window.location.href = '/support';
+    }});
+}})();";
+
+            await webView.ExecuteScriptAsync(js);
+            System.Diagnostics.Debug.WriteLine("[SilentLogin] JS injected OK");
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[SilentLogin] Exception: {ex.Message}");
+        }
     }
 
     private async void MenuGuide_Click(object sender, RoutedEventArgs e)
@@ -4272,37 +5269,77 @@ public partial class MainWindow : Window
     private void ApplyTheme()
     {
         var themeText = ThemeToggle.Content as TextBlock;
+        string iconColor;
+        
         if (_isDarkMode)
         {
+            iconColor = "#9aa0a6";
             // Dark theme colors
+            MainGrid.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#202124")!);
             TabStrip.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#202124")!);
             Toolbar.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#35363a")!);
             OmniboxBorder.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#292b2f")!);
+            OmniboxBorder.BorderBrush = null;
+            OmniboxBorder.BorderThickness = new Thickness(0);
             UrlBox.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#e8eaed")!);
+            UrlBox.CaretBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#8ab4f8")!);
+            UrlPlaceholder.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#5f6368")!);
             Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#202124")!);
+            NewTabBtn.Style = (Style)FindResource("NewTabBtnStyle");
             if (themeText != null) themeText.Text = "Light Mode";
         }
         else
         {
-            // Light theme colors
-            TabStrip.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#f1f3f4")!);
+            iconColor = "#5f6368";
+            // Light theme colors — neutral cool gray, not lavender
+            MainGrid.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#dee1e6")!);
+            TabStrip.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#dee1e6")!);
             Toolbar.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#ffffff")!);
-            OmniboxBorder.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#e8eaed")!);
+            OmniboxBorder.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#f1f3f4")!);
+            OmniboxBorder.BorderBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#dfe1e5")!);
+            OmniboxBorder.BorderThickness = new Thickness(1);
             UrlBox.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#202124")!);
-            Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#f1f3f4")!);
+            UrlBox.CaretBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#202124")!);
+            UrlPlaceholder.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#80868b")!);
+            Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#dee1e6")!);
+            NewTabBtn.Style = (Style)FindResource("LightNewTabBtnStyle");
             if (themeText != null) themeText.Text = "Dark Mode";
         }
         
-        // Update all tab title colors based on theme
+        // Recolor all toolbar icons
+        var iconBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(iconColor)!);
+        BackIcon.Stroke = iconBrush; ForwardIcon.Stroke = iconBrush;
+        RefreshArc.Stroke = iconBrush; RefreshArrow.Stroke = iconBrush;
+        NewTabIcon.Stroke = iconBrush;
+        MinIcon.Fill = iconBrush; MaxIcon.Stroke = iconBrush; CloseIcon.Stroke = iconBrush;
+        MenuDot1.Fill = iconBrush; MenuDot2.Fill = iconBrush; MenuDot3.Fill = iconBrush;
+        CopilotHead.Stroke = iconBrush;
+        CopilotEyeL.Fill = iconBrush; CopilotEyeR.Fill = iconBrush;
+        CopilotMouth.Stroke = iconBrush; CopilotBody.Stroke = iconBrush;
+        if (!BookmarkStarPath.Fill.Equals(Brushes.Transparent))
+        {
+            // Bookmarked — keep yellow
+        }
+        else
+        {
+            BookmarkStarPath.Stroke = iconBrush;
+        }
+        
+        // Update all tab styles and title colors based on theme
+        string inactiveStyle = _isDarkMode ? "TabStyle" : "LightTabStyle";
+        string activeStyle   = _isDarkMode ? "ActiveTabStyle" : "LightActiveTabStyle";
         for (int i = 0; i < _tabs.Count; i++)
         {
+            bool isActive = i == _activeTabIndex;
+            _tabs[i].TabButton.Style = (Style)FindResource(isActive ? activeStyle : inactiveStyle);
+            
             if (_tabs[i].TabButton.Content is Grid grid)
             {
                 var title = grid.Children.OfType<TextBlock>().FirstOrDefault();
                 if (title != null)
                 {
                     title.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(
-                        i == _activeTabIndex ? (_isDarkMode ? "#e8eaed" : "#202124") : (_isDarkMode ? "#9aa0a6" : "#5f6368"))!);
+                        isActive ? (_isDarkMode ? "#e8eaed" : "#202124") : (_isDarkMode ? "#9aa0a6" : "#202124"))!);
                 }
             }
             
@@ -4311,6 +5348,74 @@ public partial class MainWindow : Window
                 ? System.Drawing.Color.FromArgb(255, 32, 33, 36)  // #202124
                 : System.Drawing.Color.FromArgb(255, 255, 255, 255);  // white
         }
+        
+        // Update suggestion popup for current theme
+        OmniSuggestion.IsDark = _isDarkMode;
+        OmniSuggestion.ThemePrimary   = _isDarkMode ? "#e8eaed" : "#202124";
+        OmniSuggestion.ThemeSecondary = _isDarkMode ? "#9aa0a6" : "#5f6368";
+        SuggestBorder.Background  = new SolidColorBrush((Color)ColorConverter.ConvertFromString(_isDarkMode ? "#2d2e31" : "#ffffff")!);
+        SuggestBorder.BorderBrush = _isDarkMode
+            ? new SolidColorBrush(Color.FromArgb(20, 255, 255, 255))
+            : new SolidColorBrush(Color.FromArgb(30, 0, 0, 0));
+        
+        // Update copilot sidebar theme
+        CopilotSidebar.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(_isDarkMode ? "#1a1b26" : "#f8f9fa")!);
+        CopilotSidebar.BorderBrush = _isDarkMode
+            ? new SolidColorBrush(Color.FromArgb(20, 255, 255, 255))
+            : new SolidColorBrush(Color.FromArgb(25, 0, 0, 0));
+        CopilotHeaderBorder.Background = _isDarkMode
+            ? new SolidColorBrush(Color.FromArgb(5, 255, 255, 255))
+            : new SolidColorBrush((Color)ColorConverter.ConvertFromString("#ffffff")!);
+        CopilotHeaderBorder.BorderBrush = _isDarkMode
+            ? new SolidColorBrush(Color.FromArgb(20, 255, 255, 255))
+            : new SolidColorBrush(Color.FromArgb(25, 0, 0, 0));
+        CopilotTitleText.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(_isDarkMode ? "#e8eaed" : "#202124")!);
+        CopilotSubtitleText.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(_isDarkMode ? "#9aa0a6" : "#5f6368")!);
+        CopilotInputAreaBorder.Background = _isDarkMode
+            ? new SolidColorBrush(Color.FromArgb(5, 255, 255, 255))
+            : new SolidColorBrush((Color)ColorConverter.ConvertFromString("#ffffff")!);
+        CopilotInputAreaBorder.BorderBrush = _isDarkMode
+            ? new SolidColorBrush(Color.FromArgb(20, 255, 255, 255))
+            : new SolidColorBrush(Color.FromArgb(25, 0, 0, 0));
+        CopilotInputFieldBorder.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(_isDarkMode ? "#2a2b36" : "#f1f3f4")!);
+        CopilotInputFieldBorder.BorderBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(_isDarkMode ? "#3d3e4a" : "#dfe1e5")!);
+        CopilotInput.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(_isDarkMode ? "#e8eaed" : "#202124")!);
+        // Update menu popup theme
+        MenuPopupBorder.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(_isDarkMode ? "#2d2e31" : "#ffffff")!);
+        MenuPopupBorder.BorderBrush = _isDarkMode
+            ? new SolidColorBrush(Color.FromArgb(18, 255, 255, 255))
+            : new SolidColorBrush(Color.FromArgb(30, 0, 0, 0));
+        var menuFg = new SolidColorBrush((Color)ColorConverter.ConvertFromString(_isDarkMode ? "#e8eaed" : "#202124")!);
+        foreach (var child in LogicalTreeHelper.GetChildren(MenuPopupBorder.Child as StackPanel ?? new StackPanel()))
+        {
+            if (child is Button mb) mb.Foreground = menuFg;
+        }
+        
+        // Rebuild ItemContainerStyle so hover/selected backgrounds match theme
+        var hoverColor = (Color)ColorConverter.ConvertFromString(_isDarkMode ? "#3c4043" : "#f1f3f4")!;
+        var fgColor    = (Color)ColorConverter.ConvertFromString(_isDarkMode ? "#e8eaed" : "#202124")!;
+        var itemStyle = new Style(typeof(ListBoxItem));
+        itemStyle.Setters.Add(new Setter(Control.BackgroundProperty, Brushes.Transparent));
+        itemStyle.Setters.Add(new Setter(Control.ForegroundProperty, new SolidColorBrush(fgColor)));
+        itemStyle.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(12, 7, 12, 7)));
+        itemStyle.Setters.Add(new Setter(FrameworkElement.CursorProperty, Cursors.Hand));
+        itemStyle.Setters.Add(new Setter(FrameworkElement.FocusVisualStyleProperty, null));
+        var bdFactory = new FrameworkElementFactory(typeof(Border), "Bd");
+        bdFactory.SetBinding(Border.BackgroundProperty, new System.Windows.Data.Binding
+            { RelativeSource = new System.Windows.Data.RelativeSource(System.Windows.Data.RelativeSourceMode.TemplatedParent), Path = new PropertyPath(Control.BackgroundProperty) });
+        bdFactory.SetBinding(Border.PaddingProperty, new System.Windows.Data.Binding
+            { RelativeSource = new System.Windows.Data.RelativeSource(System.Windows.Data.RelativeSourceMode.TemplatedParent), Path = new PropertyPath(Control.PaddingProperty) });
+        var cpFactory = new FrameworkElementFactory(typeof(ContentPresenter));
+        bdFactory.AppendChild(cpFactory);
+        var ct = new ControlTemplate(typeof(ListBoxItem)) { VisualTree = bdFactory };
+        var hoverTrigger = new Trigger { Property = UIElement.IsMouseOverProperty, Value = true };
+        hoverTrigger.Setters.Add(new Setter(Border.BackgroundProperty, new SolidColorBrush(hoverColor), "Bd"));
+        ct.Triggers.Add(hoverTrigger);
+        var selTrigger = new Trigger { Property = ListBoxItem.IsSelectedProperty, Value = true };
+        selTrigger.Setters.Add(new Setter(Border.BackgroundProperty, new SolidColorBrush(hoverColor), "Bd"));
+        ct.Triggers.Add(selTrigger);
+        itemStyle.Setters.Add(new Setter(Control.TemplateProperty, ct));
+        SuggestionsList.ItemContainerStyle = itemStyle;
     }
     
     // Download shelf
@@ -4729,6 +5834,8 @@ public partial class MainWindow : Window
         popup.Content = border;
         popup.Deactivated += (s, a) => { try { if (popup.IsVisible) popup.Close(); } catch { } };
         popup.Show();
+        ForcePopupOnTop(popup);
+        TrackPopupPosition(popup, () => { var pt = BookmarkBtn.PointToScreen(new Point(BookmarkBtn.ActualWidth / 2, BookmarkBtn.ActualHeight)); return (pt.X - 280, pt.Y + 6); });
     }
 
     private void ShowRestorePrompt()
@@ -4749,9 +5856,10 @@ public partial class MainWindow : Window
             WindowStartupLocation = WindowStartupLocation.Manual
         };
 
-        var pt = BookmarkBtn.PointToScreen(new Point(BookmarkBtn.ActualWidth / 2, BookmarkBtn.ActualHeight));
-        popup.Left = pt.X - 280;
-        popup.Top  = pt.Y + 6;
+        // Position below the toolbar, right-aligned inside the browser window
+        var winPt = this.PointToScreen(new Point(this.ActualWidth, 36 + 46));
+        popup.Left = winPt.X - 310;  // 300px popup + 10px margin from right edge
+        popup.Top  = winPt.Y + 4;
 
         var border = new Border
         {
@@ -4842,8 +5950,11 @@ public partial class MainWindow : Window
         };
         freshBtn.Click += (s, e) =>
         {
+            // Track the startup tab so SaveSettings() can exclude it from LastTabs —
+            // prevents the restore prompt appearing next session just for the homepage.
+            _freshStartTab = _tabs.Count > 0 ? _tabs[0] : null;
+            _freshStartTabInitialUrl = _freshStartTab?.Url;
             _settings.LastTabs = null;
-            SaveSettings();
             popup.Close();
         };
 
@@ -4876,6 +5987,43 @@ public partial class MainWindow : Window
         border.Child = stack;
         popup.Content = border;
         popup.Show();
+        ForcePopupOnTop(popup);
+        TrackPopupPosition(popup, () => { var p = this.PointToScreen(new Point(this.ActualWidth, 36 + 46)); return (p.X - 310, p.Y + 4); });
+    }
+
+    /// <summary>Keeps <paramref name="popup"/> anchored to the same screen position relative to the
+    /// main window whenever the window is moved or resized, and ensures it stays above the
+    /// WebView2 content even when the main window is activated.</summary>
+    private void TrackPopupPosition(Window popup, Func<(double left, double top)> computePosition)
+    {
+        void Reposition()
+        {
+            if (!popup.IsVisible) return;
+            var (left, top) = computePosition();
+            popup.Left = left;
+            popup.Top  = top;
+            ForcePopupOnTop(popup);
+        }
+        void OnMoveOrActivate(object? s, EventArgs e) => Reposition();
+        void OnSizeChanged(object? s, SizeChangedEventArgs e) => Reposition();
+        LocationChanged += OnMoveOrActivate;
+        Activated       += OnMoveOrActivate;
+        SizeChanged     += OnSizeChanged;
+        popup.Closed    += (s, e) =>
+        {
+            LocationChanged -= OnMoveOrActivate;
+            Activated       -= OnMoveOrActivate;
+            SizeChanged     -= OnSizeChanged;
+        };
+    }
+
+    /// <summary>Forces <paramref name="popup"/> to the top of the z-order without stealing focus,
+    /// counteracting any airspace z-order disturbance caused by WebView2's HWND.</summary>
+    private void ForcePopupOnTop(Window popup)
+    {
+        var handle = new WindowInteropHelper(popup).Handle;
+        if (handle != IntPtr.Zero)
+            SetWindowPos(handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE);
     }
 
     private static string GetDomain(string url)
@@ -4885,16 +6033,17 @@ public partial class MainWindow : Window
     }
     private void AddToHistory(string? url, string? title)
     {
-        // Don't save history in incognito mode
         if (_isIncognito) return;
         if (string.IsNullOrEmpty(url) || url.StartsWith("ycb://")) return;
+        // Ignore entries fired immediately after a clear (WebView2 can fire
+        // DocumentTitleChanged on all open tabs right after ClearBrowsingData)
+        if ((DateTime.UtcNow - _historyClearedAt).TotalSeconds < 3) return;
         
         try
         {
             var history = LoadHistory();
             history.Insert(0, new HistoryItem { Url = url, Title = title ?? url, Timestamp = DateTime.Now });
             if (history.Count > 1000) history.RemoveAt(history.Count - 1);
-            
             var json = JsonSerializer.Serialize(history, new JsonSerializerOptions { WriteIndented = true });
             File.WriteAllText(_historyPath, json);
         }
@@ -4908,7 +6057,11 @@ public partial class MainWindow : Window
             if (File.Exists(_historyPath))
             {
                 var json = File.ReadAllText(_historyPath);
-                return JsonSerializer.Deserialize<List<HistoryItem>>(json) ?? new List<HistoryItem>();
+                var all = JsonSerializer.Deserialize<List<HistoryItem>>(json) ?? new List<HistoryItem>();
+                // Filter out anything older than the last clear — bulletproof even if delete fails
+                if (_historyClearedAt > DateTime.MinValue)
+                    all = all.Where(h => h.Timestamp > _historyClearedAt).ToList();
+                return all;
             }
         }
         catch { }
@@ -4943,12 +6096,14 @@ public partial class MainWindow : Window
     
     private void ClearHistory()
     {
+        _historyClearedAt = DateTime.UtcNow;
+        _settings.HistoryClearedAt = _historyClearedAt;
+        SaveSettings();
+        // Delete and recreate as empty — leaves no old data on disk
         try
         {
-            if (File.Exists(_historyPath))
-            {
-                File.Delete(_historyPath);
-            }
+            File.Delete(_historyPath);
+            File.WriteAllText(_historyPath, "[]");
         }
         catch { }
     }
@@ -5134,47 +6289,9 @@ public partial class MainWindow : Window
     // Default browser registration
     private void SetAsDefaultBrowser()
     {
-        try
-        {
-            var exePath = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName
-                          ?? IoPath.Combine(System.AppContext.BaseDirectory, "YCB.exe");
-            if (exePath.EndsWith(".dll"))
-            {
-                exePath = exePath.Replace(".dll", ".exe");
-            }
-            
-            var cmdStr = $"\"{exePath}\" \"%1\"";
-            
-            // Register URL handler
-            var registryKeys = new (string key, string name, string value)[]
-            {
-                (@"HKEY_CURRENT_USER\Software\Classes\YCBUrl", "", "YCB URL"),
-                (@"HKEY_CURRENT_USER\Software\Classes\YCBUrl", "URL Protocol", ""),
-                (@"HKEY_CURRENT_USER\Software\Classes\YCBUrl\shell\open\command", "", cmdStr),
-                (@"HKEY_CURRENT_USER\Software\Classes\YCBHtml", "", "YCB HTML Document"),
-                (@"HKEY_CURRENT_USER\Software\Classes\YCBHtml\shell\open\command", "", cmdStr),
-                (@"HKEY_CURRENT_USER\Software\YCB\Capabilities", "ApplicationName", "YCB Browser"),
-                (@"HKEY_CURRENT_USER\Software\YCB\Capabilities", "ApplicationDescription", "YCB Browser with WebView2"),
-                (@"HKEY_CURRENT_USER\Software\YCB\Capabilities\URLAssociations", "http", "YCBUrl"),
-                (@"HKEY_CURRENT_USER\Software\YCB\Capabilities\URLAssociations", "https", "YCBUrl"),
-                (@"HKEY_CURRENT_USER\Software\YCB\Capabilities\FileAssociations", ".htm", "YCBHtml"),
-                (@"HKEY_CURRENT_USER\Software\YCB\Capabilities\FileAssociations", ".html", "YCBHtml"),
-                (@"HKEY_CURRENT_USER\Software\RegisteredApplications", "YCB", @"Software\YCB\Capabilities"),
-            };
-            
-            foreach (var (key, name, value) in registryKeys)
-            {
-                try
-                {
-                    Microsoft.Win32.Registry.SetValue(key, name, value);
-                }
-                catch { }
-            }
-            
-            // Open Windows Default Apps settings
-            Process.Start(new ProcessStartInfo("ms-settings:defaultapps") { UseShellExecute = true });
-        }
-        catch { }
+        // Ensure registration is up to date (updates exe path, writes Capabilities + RegisteredApplications)
+        // This is done via App so the logic is in one place
+        App.OpenDefaultAppsForYCB();
     }
     
     private bool CheckIsDefaultBrowser()
@@ -5255,20 +6372,17 @@ public partial class MainWindow : Window
                 SaveSettings();
                 break;
 
-            case "quick_download_enabled":
-                _settings.QuickDownloadEnabled = value == "on";
-                SaveSettings();
-                if (_settings.QuickDownloadEnabled)
-                    StartDlServer();
-                else
-                    StopDlServer();
-                break;
-
             case "ad_blocker_enabled":
                 _settings.AdBlockerEnabled = value == "on";
                 SaveSettings();
                 UpdateAdBlockButton();
                 break;
+
+            case "home_page":
+                _settings.HomePage = value;
+                SaveSettings();
+                break;
+
         }
     }
     
@@ -5328,7 +6442,6 @@ public partial class MainWindow : Window
     protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
     {
         SaveSettings();
-        StopDlServer();
         base.OnClosing(e);
     }
 
@@ -5349,413 +6462,6 @@ public partial class MainWindow : Window
         catch { return false; }
     }
 
-    private static string GetSearchEnhancerScript() => $$"""
-(function() {
-  'use strict';
-  var _h = location.hostname, _p = location.pathname, _q = location.search;
-  var _ok = (_h.includes('google.') && _p.includes('/search') && _q.includes('q=')) ||
-            (_h.includes('bing.com') && _q.includes('q=')) ||
-            (_h.includes('duckduckgo.com') && _q.includes('q=')) ||
-            (_h.includes('ecosia.org') && _q.includes('q='));
-  if (!_ok) return;
-  if (window._ycbSE) return; window._ycbSE = 1;
-
-  var REMOTE = 'http://127.0.0.1:3210/api/get-download-link';
-  var _cache = new Map();
-  var MAX_RESULTS = 5;
-
-  function getFileName(url) {
-    try {
-      var n = new URL(url).pathname.split('/').pop();
-      if (n && n.includes('.')) return decodeURIComponent(n);
-    } catch(e) {}
-    return null;
-  }
-
-  function renderResult(row, links) {
-    row.innerHTML = '';
-    row.style.color = '#70757a';
-    if (!links.length) {
-      row.remove();
-      return;
-    }
-    var icon = document.createElement('span');
-    icon.textContent = '\u2913';
-    icon.style.cssText = 'color:#1a73e8;font-size:13px;flex-shrink:0';
-    row.appendChild(icon);
-    if (links.length === 1) {
-      var fn = links[0].label || getFileName(links[0].url) || links[0].url;
-      var span = document.createElement('span');
-      span.textContent = fn;
-      span.style.cssText = 'color:#202124;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:280px';
-      row.appendChild(span);
-      row.appendChild(makeBtn('Download', links[0].url));
-    } else {
-      var sel = document.createElement('select');
-      sel.style.cssText = 'border:1px solid #dadce0;border-radius:4px;padding:1px 5px;font-size:11px;color:#202124;background:#fff;cursor:pointer;max-width:340px;flex-shrink:1';
-      // Stop ALL events from bubbling to the search result anchor
-      ['click','mousedown','mouseup','pointerdown','pointerup','touchstart','touchend'].forEach(function(evt) {
-        sel.addEventListener(evt, function(ev) { ev.stopPropagation(); ev.preventDefault(); }, true);
-      });
-      // Don't let change event bubble
-      sel.addEventListener('change', function(ev) { ev.stopPropagation(); });
-
-      // Group by OS — 'Any' files listed under their type, not under Windows
-      var groups = {};
-      links.forEach(function(l) {
-        var cat = (!l.os || l.os === 'Any') ? 'Files' : l.os;
-        if (!groups[cat]) groups[cat] = [];
-        groups[cat].push(l);
-      });
-      var catOrder = ['Windows', 'macOS', 'Linux', 'Android', 'iOS', 'Files'];
-      // If every link is in Files, skip the optgroup header
-      var allFiles = Object.keys(groups).length === 1 && groups['Files'];
-      catOrder.forEach(function(cat) {
-        if (!groups[cat] || !groups[cat].length) return;
-        var useGroup = !allFiles && (groups[cat].length > 1 || Object.keys(groups).length > 1);
-        var grp = useGroup ? document.createElement('optgroup') : null;
-        if (grp) { grp.label = cat; sel.appendChild(grp); }
-        groups[cat].forEach(function(l) {
-          var o = document.createElement('option');
-          o.value = l.url;
-          o.textContent = l.label || getFileName(l.url) || l.url;
-          (grp || sel).appendChild(o);
-        });
-      });
-
-      row.appendChild(sel);
-      var dlBtn = makeBtn('Download', null);
-      dlBtn.addEventListener('click', function(ev) {
-        ev.preventDefault(); ev.stopPropagation();
-        var chosen = sel.value;
-        if (!chosen) return;
-        dlBtn.textContent = '\u21ba Opening\u2026'; dlBtn.disabled = true;
-        setTimeout(function() { sendDl(chosen); }, 10); // defer so select value is stable
-      }, true);
-      row.appendChild(dlBtn);
-    }
-  }
-
-  function processResult(a) {
-    if (a.dataset.ycbDone) return;
-    a.dataset.ycbDone = '1';
-    var url = a.href;
-
-    var container = a.closest('div.g') || a.closest('.MjjYud') ||
-                    a.closest('[data-sokoban-container]') ||
-                    a.closest('.b_algo') ||
-                    a.closest('[data-testid="result"]') ||
-                    a.parentElement;
-    var cite = container && container.querySelector('cite');
-    var insertAfter = (cite && (cite.parentElement || cite)) || a;
-
-    var row = document.createElement('div');
-    row.dataset.ycbRow = '1';
-    row.style.cssText = 'display:flex;align-items:center;gap:6px;font-size:11px;color:#70757a;margin:1px 0 4px;font-family:arial,sans-serif;line-height:1.5;min-height:16px';
-    insertAfter.insertAdjacentElement('afterend', row);
-
-    if (_cache.has(url)) { renderResult(row, _cache.get(url)); return; }
-
-    row.textContent = '\u2913 Checking\u2026';
-
-    var title = '';
-    var h3 = a.querySelector('h3');
-    if (h3) title = h3.textContent;
-
-    // Scrape the search result snippet so the remote server has context
-    var snippet = '';
-    if (container) {
-      // Try known snippet selectors across search engines
-      var snipEl = container.querySelector('.VwiC3b, [data-sncf], .b_caption p, .result__snippet, .IsZvec');
-      if (snipEl) {
-        snippet = snipEl.textContent.trim().slice(0, 300);
-      } else {
-        // Fallback: grab visible text from the container, skip the title itself
-        var allText = container.textContent || '';
-        var titleIdx = title ? allText.indexOf(title) : -1;
-        var after = titleIdx >= 0 ? allText.slice(titleIdx + title.length) : allText;
-        snippet = after.trim().slice(0, 300);
-      }
-    }
-
-    var ctrl = new AbortController();
-    var timer = setTimeout(function() { ctrl.abort(); }, 8000);
-
-    fetch(REMOTE, {
-      method: 'POST',
-      headers: {'Content-Type':'application/json', 'X-YCB-Client':'1'},
-      body: JSON.stringify({url: url, title: title, snippet: snippet, pageUrl: location.href, learnLog: window._ycbLearnLog || []}),
-      signal: ctrl.signal
-    })
-    .then(function(r) { clearTimeout(timer); return r.json(); })
-    .then(function(data) {
-      var links = (data && data.downloadLinks) || [];
-      _cache.set(url, links);
-      renderResult(row, links);
-    })
-    .catch(function() { clearTimeout(timer); row.remove(); });
-  }
-
-  function sendDl(url) {
-    if (window.chrome && window.chrome.webview)
-      window.chrome.webview.postMessage({type:'quickdownload:open', url: url});
-    else window.open(url, '_blank');
-  }
-
-  function makeBtn(label, url) {
-    var b = document.createElement('button');
-    b.textContent = label;
-    b.style.cssText = 'background:#1a73e8;color:#fff;border:none;border-radius:4px;padding:2px 10px;font-size:11px;cursor:pointer;font-weight:500;flex-shrink:0';
-    b.onmouseover = function() { if (!b.disabled) b.style.background='#1558b0'; };
-    b.onmouseout  = function() { if (!b.disabled) b.style.background='#1a73e8'; };
-    if (url) b.onclick = function(ev) {
-      ev.preventDefault(); ev.stopPropagation();
-      b.textContent = '\u21ba Opening\u2026'; b.disabled = true;
-      sendDl(url);
-    };
-    return b;
-  }
-
-  function scan() {
-    var host = location.hostname;
-    var results = [];
-    if (host.includes('google.')) {
-      document.querySelectorAll('#search a[href^="http"]').forEach(function(a) {
-        if (!a.href.includes('google.') && a.querySelector('h3') && !a.dataset.ycbDone) results.push(a);
-      });
-    } else if (host.includes('bing.com')) {
-      document.querySelectorAll('#b_results .b_algo h2 a[href^="http"]').forEach(function(a) {
-        if (!a.dataset.ycbDone) results.push(a);
-      });
-    } else if (host.includes('duckduckgo.com')) {
-      document.querySelectorAll('[data-testid="result-title-a"][href^="http"]').forEach(function(a) {
-        if (!a.dataset.ycbDone) results.push(a);
-      });
-    } else if (host.includes('ecosia.org')) {
-      document.querySelectorAll('.result__title a[href^="http"]').forEach(function(a) {
-        if (!a.dataset.ycbDone) results.push(a);
-      });
-    }
-    results.slice(0, MAX_RESULTS).forEach(processResult);
-  }
-
-  // Scan at DOMContentLoaded (much earlier than NavigationCompleted)
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', scan, {once: true});
-  } else {
-    scan();
-  }
-
-  // Catch dynamically-loaded results (Google infinite scroll, etc.)
-  var _ycbTimer;
-  new MutationObserver(function() {
-    clearTimeout(_ycbTimer);
-    _ycbTimer = setTimeout(scan, 150);
-  }).observe(document.documentElement, {childList:true, subtree:true});
-})();
-";
-
-    // ─── Quick Download Server ─────────────────────────────────────────────────
-
-    private static async Task LearnDownloadAsync(string pageUrl, string downloadUrl)
-    {
-        try
-        {
-            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
-            var payload = JsonSerializer.Serialize(new { pageUrl, downloadUrl });
-            http.DefaultRequestHeaders.Add("X-YCB-Client", "1");
-            await http.PostAsync("http://127.0.0.1:3210/api/learn",
-                new StringContent(payload, Encoding.UTF8, "application/json"));
-        }
-        catch { }
-    }
-
-    private static void StartDlServer()
-    {
-        if (_dlServerProcess != null && !_dlServerProcess.HasExited) return;
-
-        var exeDir = AppDomain.CurrentDomain.BaseDirectory;
-        var serverExe = IoPath.Combine(exeDir, "ycb-smartdl.exe");
-        if (!File.Exists(serverExe)) return;
-
-        var psi = new ProcessStartInfo(serverExe)
-        {
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WindowStyle = ProcessWindowStyle.Hidden
-        };
-        try { _dlServerProcess = Process.Start(psi); }
-        catch { /* server unavailable */ }
-    }
-
-    private static void StopDlServer()
-    {
-        try
-        {
-            if (_dlServerProcess != null && !_dlServerProcess.HasExited)
-                _dlServerProcess.Kill(entireProcessTree: true);
-        }
-        catch { }
-        _dlServerProcess = null;
-    }
-
-    private async Task ScanAndInjectDownloadBar(WebView2 webView, string url, string title, CancellationToken ct)
-    {
-        if (!_settings.QuickDownloadEnabled) return;
-
-        // Remote endpoint — no local server needed; small delay lets page settle
-        try { await Task.Delay(600, ct); } catch (OperationCanceledException) { return; }
-
-        if (ct.IsCancellationRequested) return;
-
-        try
-        {
-            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
-            var payload = JsonSerializer.Serialize(new { url, title, pageUrl = url, learnLog = GetLearnLog() });
-            var content = new StringContent(payload, Encoding.UTF8, "application/json");
-            http.DefaultRequestHeaders.Add("X-YCB-Client", "1");
-            var resp = await http.PostAsync("http://127.0.0.1:3210/api/get-download-link", content);
-
-            if (ct.IsCancellationRequested || !resp.IsSuccessStatusCode) return;
-
-            var json = await resp.Content.ReadAsStringAsync();
-            if (ct.IsCancellationRequested) return;
-
-            using var doc = JsonDocument.Parse(json);
-            var linksEl = doc.RootElement.GetProperty("downloadLinks");
-            if (linksEl.GetArrayLength() == 0) return;
-
-            var linkList = linksEl.EnumerateArray().Select(link =>
-            {
-                var dlUrl = link.GetProperty("url").GetString() ?? "";
-                var os   = link.TryGetProperty("os",   out var o) ? o.GetString() ?? "" : "";
-                var arch = link.TryGetProperty("arch", out var a) ? a.GetString() ?? "" : "";
-                var type = link.TryGetProperty("type", out var t) ? t.GetString() ?? "" : "";
-                var ver  = link.TryGetProperty("version", out var v) && v.ValueKind != JsonValueKind.Null ? v.GetString() ?? "" : "";
-                var isLatest = link.TryGetProperty("isLatest", out var lat) && lat.GetBoolean();
-                var fileName = IoPath.GetFileName(dlUrl.Split('?')[0]);
-                if (string.IsNullOrEmpty(fileName)) fileName = Uri.TryCreate(dlUrl, UriKind.Absolute, out var u) ? u.Host : dlUrl;
-                var label = $"{os} {arch} {type}".Trim();
-                if (!string.IsNullOrEmpty(ver)) label += $" v{ver}";
-                if (isLatest) label += " ★";
-                return new { url = dlUrl, fileName, label };
-            }).ToList();
-
-            var linksJson = JsonSerializer.Serialize(linkList);
-            var script = BuildDownloadBarScript(linksJson);
-
-            await Dispatcher.InvokeAsync(async () =>
-            {
-                if (!ct.IsCancellationRequested)
-                {
-                    await webView.ExecuteScriptAsync(script);
-                }
-            });
-        }
-        catch (OperationCanceledException) { }
-        catch { /* server not ready, page navigated away, etc. */ }
-    }
-
-    private static string BuildDownloadBarScript(string linksJson)
-    {
-        // Language=JavaScript: load external file to avoid raw string issues
-        var exeDir = AppDomain.CurrentDomain.BaseDirectory;
-        var p = IoPath.Combine(exeDir, "renderer", "download_bar.js");
-        try { if (File.Exists(p)) return File.ReadAllText(p).Replace("{{linksJson}}", linksJson); } catch {}
-        return "(function(){ /* download bar script unavailable */ })();\n";
-(function() {
-  var existing = document.getElementById('_ycb_dl_bar');
-  if (existing) existing.remove();
-
-  var links = {{linksJson}};
-  if (!links || links.length === 0) return;
-
-  var bar = document.createElement('div');
-  bar.id = '_ycb_dl_bar';
-  bar.style.cssText = [
-    'position:fixed','bottom:0','left:0','right:0','z-index:2147483647',
-    'background:rgba(28,29,32,0.97)','border-top:1px solid rgba(255,255,255,0.1)',
-    'padding:10px 16px','display:flex','align-items:center','gap:12px',
-    'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif',
-    'font-size:13px','box-shadow:0 -4px 24px rgba(0,0,0,0.4)',
-    'backdrop-filter:blur(10px)','-webkit-backdrop-filter:blur(10px)'
-  ].join(';');
-
-  // Icon
-  var icon = document.createElement('div');
-  icon.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#8ab4f8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
-  icon.style.cssText = 'flex-shrink:0;display:flex;align-items:center;';
-  bar.appendChild(icon);
-
-  // Label
-  var lbl = document.createElement('span');
-  lbl.textContent = 'Download available';
-  lbl.style.cssText = 'color:#9aa0a6;font-size:12px;flex-shrink:0;';
-  bar.appendChild(lbl);
-
-  // Selector (dropdown if multiple, static text if single)
-  var selector;
-  if (links.length === 1) {
-    selector = document.createElement('span');
-    selector.textContent = links[0].fileName;
-    selector.title = links[0].label;
-    selector.style.cssText = 'color:#e8eaed;font-weight:500;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;';
-  } else {
-    selector = document.createElement('select');
-    selector.style.cssText = [
-      'background:#2d2e31','color:#e8eaed','border:1px solid rgba(255,255,255,0.15)',
-      'border-radius:6px','padding:5px 10px','font-size:13px','flex:1','min-width:0',
-      'cursor:pointer','outline:none','max-width:460px'
-    ].join(';');
-    links.forEach(function(l) {
-      var opt = document.createElement('option');
-      opt.value = l.url;
-      opt.textContent = l.label + '  —  ' + l.fileName;
-      selector.appendChild(opt);
-    });
-  }
-  bar.appendChild(selector);
-
-  // Download button
-  var btn = document.createElement('button');
-  btn.textContent = '\u2913 Download';
-  btn.style.cssText = [
-    'background:#1a73e8','color:#fff','border:none','border-radius:6px',
-    'padding:7px 18px','font-size:13px','font-weight:600','cursor:pointer',
-    'flex-shrink:0','white-space:nowrap','transition:background 0.15s'
-  ].join(';');
-  btn.onmouseover = function() { btn.style.background = '#1558b0'; };
-  btn.onmouseout  = function() { btn.style.background = '#1a73e8'; };
-  btn.onclick = function() {
-    var url = links.length === 1 ? links[0].url : selector.value;
-    if (window.chrome && window.chrome.webview) {
-      window.chrome.webview.postMessage({ type: 'quickdownload:open', url: url });
-    } else {
-      window.open(url, '_blank');
-    }
-    bar.remove();
-  };
-  bar.appendChild(btn);
-
-  // Close button
-  var cls = document.createElement('button');
-  cls.textContent = '\u00d7';
-  cls.title = 'Dismiss';
-  cls.style.cssText = [
-    'background:transparent','color:#9aa0a6','border:none','border-radius:4px',
-    'padding:4px 8px','font-size:18px','cursor:pointer','flex-shrink:0',
-    'line-height:1','transition:color 0.15s'
-  ].join(';');
-  cls.onmouseover = function() { cls.style.color = '#e8eaed'; };
-  cls.onmouseout  = function() { cls.style.color = '#9aa0a6'; };
-  cls.onclick = function() { bar.remove(); };
-  bar.appendChild(cls);
-
-  document.body.appendChild(bar);
-})();
-""";
-    }
-
 }
 
 // Data classes
@@ -5765,6 +6471,9 @@ public class BrowserTab
     public Button TabButton { get; set; } = null!;
     public string Url { get; set; } = "";
     public string Title { get; set; } = "New Tab";
+    public Image? TabFavicon { get; set; }
+    public Button? TabCloseBtn { get; set; }
+    public TextBlock? TabTitle { get; set; }
 }
 
 public class Settings
@@ -5786,10 +6495,9 @@ public class Settings
     public double? WindowWidth { get; set; }
     public double? WindowHeight { get; set; }
     public string? WindowState { get; set; }
-    public bool QuickDownloadEnabled { get; set; } = false;
-    public bool AdBlockerEnabled { get; set; } = false;
+    public bool AdBlockerEnabled { get; set; } = true;
     public List<string>? AdBlockerDisabledSites { get; set; }
-
+    public DateTime? HistoryClearedAt { get; set; }
 }
 
 public class HistoryItem
@@ -5880,7 +6588,18 @@ public class OmniSuggestion
     private const string HistoryPath = "M8 2 C4.686 2 2 4.686 2 8 C2 11.314 4.686 14 8 14 C11.314 14 14 11.314 14 8 C14 4.686 11.314 2 8 2 Z M8 5 L8 8.5 L11 10";
 
     public string IconPath => IsHistory ? HistoryPath : SearchPath;
-    public string IconColor => IsHistory ? "#8ab4f8" : "#9aa0a6";
+    public string IconColor => IsHistory
+        ? (IsDark ? "#8ab4f8" : "#1a73e8")
+        : (IsDark ? "#9aa0a6" : "#5f6368");
+
+    // Static theme flag — updated by ApplyTheme() before populating suggestions
+    public static bool IsDark { get; set; } = true;
+    public static string ThemePrimary { get; set; } = "#e8eaed";
+    public static string ThemeSecondary { get; set; } = "#9aa0a6";
+
+    public string PrimaryColor => ThemePrimary;
+    public string SecondaryColor => ThemeSecondary;
+
     public System.Windows.Visibility SecondaryVisibility =>
         string.IsNullOrEmpty(Secondary) ? System.Windows.Visibility.Collapsed : System.Windows.Visibility.Visible;
 }

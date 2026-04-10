@@ -26,3 +26,9 @@ ycb-server/
 
 # YCB project — built exe is committed intentionally (used by installer)
 # YCB/ycb-smartdl.exe — tracked
+
+publish_out/
+publish_setup/
+publish_single/
+YCB/publish_new/
+YCB/publish_sf/

@@ -8,7 +8,7 @@
              ═══════════════════════════════════════════════════════════════════════ -->
         <Style x:Key="TabStyle" TargetType="Button">
             <Setter Property="Width" Value="200"/>
-            <Setter Property="MinWidth" Value="60"/>
+            <Setter Property="MinWidth" Value="20"/>
             <Setter Property="MaxWidth" Value="220"/>
             <Setter Property="Height" Value="32"/>
             <Setter Property="Background" Value="Transparent"/>
@@ -39,7 +39,82 @@
         </Style>
         
         <Style x:Key="ActiveTabStyle" TargetType="Button" BasedOn="{StaticResource TabStyle}">
-            <Setter Property="Background" Value="#35363a"/>
+            <Setter Property="Background" Value="#3a3b3f"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Border" Background="{TemplateBinding Background}"
+                                CornerRadius="8,8,0,0" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Border" Property="Background" Value="#42434a"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        
+        <!-- ═══════════════════════════════════════════════════════════════════════
+             LIGHT MODE TAB STYLES
+             ═══════════════════════════════════════════════════════════════════════ -->
+        <Style x:Key="LightTabStyle" TargetType="Button">
+            <Setter Property="Width" Value="200"/>
+            <Setter Property="MinWidth" Value="20"/>
+            <Setter Property="MaxWidth" Value="220"/>
+            <Setter Property="Height" Value="32"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="10,0,8,0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Border" Background="{TemplateBinding Background}"
+                                CornerRadius="8,8,0,0" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Border" Property="Background" Value="#cdd1d6"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        
+        <Style x:Key="LightActiveTabStyle" TargetType="Button">
+            <Setter Property="Width" Value="200"/>
+            <Setter Property="MinWidth" Value="20"/>
+            <Setter Property="MaxWidth" Value="220"/>
+            <Setter Property="Height" Value="32"/>
+            <Setter Property="Background" Value="#ffffff"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="10,0,8,0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Border" Background="{TemplateBinding Background}"
+                                CornerRadius="8,8,0,0" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Border" Property="Background" Value="#f2f2f2"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
         
         <!-- ═══════════════════════════════════════════════════════════════════════
@@ -64,6 +139,28 @@
                                         <SolidColorBrush Color="#FFFFFF" Opacity="0.1"/>
                                     </Setter.Value>
                                 </Setter>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        
+        <Style x:Key="LightNewTabBtnStyle" TargetType="Button">
+            <Setter Property="Width" Value="26"/>
+            <Setter Property="Height" Value="26"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Border" Background="{TemplateBinding Background}" CornerRadius="13">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Border" Property="Background" Value="#18000000"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>

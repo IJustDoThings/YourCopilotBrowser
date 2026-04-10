@@ -263,6 +263,43 @@ webview2Ok:
     CreateShortcut "$DESKTOP\YCB App.lnk" "$INSTDIR\YCB.exe"
     WriteRegStr HKLM "Software\YCB" "InstallLocation" "$INSTDIR"
     WriteRegStr HKLM "Software\YCB" "AIOption" "$AI_OPTION"
+
+    ; ── Purge stale HKCU entries that cause duplicate Default Apps entries ────
+    DeleteRegValue HKCU "SOFTWARE\RegisteredApplications" "YCB"
+    DeleteRegValue HKCU "SOFTWARE\RegisteredApplications" "YCB Browser"
+    DeleteRegKey HKCU "SOFTWARE\YCB"
+
+    ; ── URL ProgIDs ────────────────────────────────────────────────────────────
+    WriteRegStr HKLM "SOFTWARE\Classes\YCBUrl" "" "YCB Browser URL"
+    WriteRegStr HKLM "SOFTWARE\Classes\YCBUrl" "URL Protocol" ""
+    WriteRegStr HKLM "SOFTWARE\Classes\YCBUrl\DefaultIcon" "" "$INSTDIR\YCB.exe,0"
+    WriteRegStr HKLM "SOFTWARE\Classes\YCBUrl\shell\open\command" "" '"$INSTDIR\YCB.exe" "%1"'
+    WriteRegStr HKLM "SOFTWARE\Classes\YCBHtml" "" "YCB Browser HTML Document"
+    WriteRegStr HKLM "SOFTWARE\Classes\YCBHtml\DefaultIcon" "" "$INSTDIR\YCB.exe,0"
+    WriteRegStr HKLM "SOFTWARE\Classes\YCBHtml\shell\open\command" "" '"$INSTDIR\YCB.exe" "%1"'
+    WriteRegStr HKCU "SOFTWARE\Classes\YCBUrl" "" "YCB Browser URL"
+    WriteRegStr HKCU "SOFTWARE\Classes\YCBUrl" "URL Protocol" ""
+    WriteRegStr HKCU "SOFTWARE\Classes\YCBUrl\DefaultIcon" "" "$INSTDIR\YCB.exe,0"
+    WriteRegStr HKCU "SOFTWARE\Classes\YCBUrl\shell\open\command" "" '"$INSTDIR\YCB.exe" "%1"'
+    WriteRegStr HKCU "SOFTWARE\Classes\YCBHtml" "" "YCB Browser HTML Document"
+    WriteRegStr HKCU "SOFTWARE\Classes\YCBHtml\DefaultIcon" "" "$INSTDIR\YCB.exe,0"
+    WriteRegStr HKCU "SOFTWARE\Classes\YCBHtml\shell\open\command" "" '"$INSTDIR\YCB.exe" "%1"'
+
+    ; ── StartMenuInternet registration (proper browser path — enables Default Apps deep-link) ──
+    WriteRegStr HKLM "SOFTWARE\Clients\StartMenuInternet\YCB Browser" "" "YCB Browser"
+    WriteRegStr HKLM "SOFTWARE\Clients\StartMenuInternet\YCB Browser\DefaultIcon" "" "$INSTDIR\YCB.exe,0"
+    WriteRegStr HKLM "SOFTWARE\Clients\StartMenuInternet\YCB Browser\shell\open\command" "" '"$INSTDIR\YCB.exe"'
+    WriteRegStr HKLM "SOFTWARE\Clients\StartMenuInternet\YCB Browser\Capabilities" "ApplicationName" "YCB Browser"
+    WriteRegStr HKLM "SOFTWARE\Clients\StartMenuInternet\YCB Browser\Capabilities" "ApplicationDescription" "Fast YCB Browser powered by WebView2"
+    WriteRegStr HKLM "SOFTWARE\Clients\StartMenuInternet\YCB Browser\Capabilities\URLAssociations" "http" "YCBUrl"
+    WriteRegStr HKLM "SOFTWARE\Clients\StartMenuInternet\YCB Browser\Capabilities\URLAssociations" "https" "YCBUrl"
+    WriteRegStr HKLM "SOFTWARE\Clients\StartMenuInternet\YCB Browser\Capabilities\FileAssociations" ".htm" "YCBHtml"
+    WriteRegStr HKLM "SOFTWARE\Clients\StartMenuInternet\YCB Browser\Capabilities\FileAssociations" ".html" "YCBHtml"
+    WriteRegDWORD HKLM "SOFTWARE\Clients\StartMenuInternet\YCB Browser\InstallInfo" "IconsVisible" 1
+    ; Point RegisteredApplications at the StartMenuInternet Capabilities path
+    WriteRegStr HKLM "SOFTWARE\RegisteredApplications" "YCB Browser" "SOFTWARE\Clients\StartMenuInternet\YCB Browser\Capabilities"
+    ; Notify Windows shell that associations changed
+    System::Call 'shell32::SHChangeNotify(i 0x8000000, i 0, i 0, i 0)'
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\YCB" "DisplayName" "YCB Browser"
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\YCB" "UninstallString" '"$INSTDIR\Uninstall.exe"'
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\YCB" "InstallLocation" "$INSTDIR"
@@ -292,6 +329,15 @@ skipUnRmData:
     Delete "$DESKTOP\YCB App.lnk"
     DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\YCB"
     DeleteRegKey HKLM "Software\YCB"
+    DeleteRegKey HKLM "SOFTWARE\Classes\YCBUrl"
+    DeleteRegKey HKLM "SOFTWARE\Classes\YCBHtml"
+    DeleteRegKey HKLM "SOFTWARE\Clients\StartMenuInternet\YCB Browser"
+    DeleteRegValue HKLM "SOFTWARE\RegisteredApplications" "YCB Browser"
+    DeleteRegKey HKCU "SOFTWARE\Classes\YCBUrl"
+    DeleteRegKey HKCU "SOFTWARE\Classes\YCBHtml"
+    DeleteRegValue HKCU "SOFTWARE\RegisteredApplications" "YCB Browser"
+    DeleteRegKey HKCU "SOFTWARE\YCB"
+    System::Call 'shell32::SHChangeNotify(i 0x8000000, i 0, i 0, i 0)'
     ${If} ${RunningX64}
         ${EnableX64FSRedirection}
     ${EndIf}

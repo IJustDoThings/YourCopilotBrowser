@@ -12,6 +12,7 @@
     <Company>YCB</Company>
     <Description>YCB Browser - A modern WebView2-based browser with Copilot integration</Description>
     <Version>1.0.0</Version>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
 
   <ItemGroup>
@@ -25,9 +26,9 @@
   </ItemGroup>
   
   <ItemGroup>
-    <Content Include="renderer\**\*">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
+    <EmbeddedResource Include="renderer\**\*">
+      <LogicalName>renderer/%(RecursiveDir)%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
   </ItemGroup>
 
 </Project>

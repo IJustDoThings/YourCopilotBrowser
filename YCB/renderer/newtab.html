@@ -6,379 +6,669 @@
   <style>
     *, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
 
+    :root {
+      --bg: #f2f2f2;
+      --bg2: #e8e8e8;
+      --bg3: #dadada;
+      --text: #1f1f1f;
+      --text2: #5f6368;
+      --text3: #80868b;
+      --border: rgba(0,0,0,0.1);
+      --hover: rgba(0,0,0,0.06);
+      --blue: #1a73e8;
+      --blue-hover: #1557b0;
+      --shadow: 0 1px 3px rgba(0,0,0,0.08), 0 2px 8px rgba(0,0,0,0.05);
+      --search-border: rgba(0,0,0,0.1);
+      --search-focus: #1a73e8;
+      --modal-bg: #f9f9f9;
+      --search-bg: #ffffff;
+    }
+    body.dark {
+      --bg: #202124;
+      --bg2: #303134;
+      --bg3: #3c4043;
+      --text: #e8eaed;
+      --text2: #9aa0a6;
+      --text3: #5f6368;
+      --border: rgba(255,255,255,0.1);
+      --hover: rgba(255,255,255,0.08);
+      --blue: #8ab4f8;
+      --blue-hover: #aecbfa;
+      --shadow: 0 1px 6px rgba(0,0,0,0.4);
+      --search-border: rgba(255,255,255,0.12);
+      --search-focus: #8ab4f8;
+      --modal-bg: #2d2e32;
+      --search-bg: #303134;
+    }
+
     body {
-      background: #202124;
-      color: #e8eaed;
+      background: var(--bg);
+      color: var(--text);
       font-family: -apple-system, 'Segoe UI', Roboto, Arial, sans-serif;
       height: 100vh;
+      overflow: hidden;
       display: flex;
       flex-direction: column;
-      overflow: hidden;
+      transition: background 0.2s, color 0.2s;
     }
 
-    /* ── Greeting ──────────────────────────────────────────────── */
-    .greeting-bar {
-      padding: 22px 36px 0;
-      font-size: 20px;
-      font-weight: 400;
-      color: #bdc1c6;
-      flex-shrink: 0;
+    /* ── Top bar (Gmail / Images links like Chrome) ── */
+    .ntp-topbar {
+      position: fixed;
+      top: 0; right: 0;
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      z-index: 50;
     }
-    .greeting-bar span { color: #8ab4f8; }
+    .ntp-toplink {
+      font-size: 13px;
+      color: var(--text2);
+      text-decoration: none;
+      padding: 6px 8px;
+      border-radius: 4px;
+      transition: background 0.15s, color 0.15s;
+      cursor: pointer;
+      background: none;
+      border: none;
+    }
+    .ntp-toplink:hover { background: var(--hover); color: var(--text); }
+    .ntp-grid-btn {
+      width: 32px; height: 32px;
+      border-radius: 50%;
+      background: none;
+      border: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text2);
+      margin-left: 4px;
+      transition: background 0.15s;
+    }
+    .ntp-grid-btn:hover { background: var(--hover); }
 
-    /* ── Main grid ─────────────────────────────────────────────── */
-    .main-grid {
+    /* ── Main content ── */
+    .ntp-center {
       flex: 1;
       display: flex;
-      padding: 18px 36px 14px;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 0 24px 20px;
+      gap: 24px;
       min-height: 0;
     }
 
-    .card {
-      background: #2d2e30;
-      border-radius: 14px;
-      border: 1px solid rgba(255,255,255,0.07);
-      padding: 28px 32px 24px;
+    /* ── YCB Wordmark ── */
+    .ntp-logo {
       display: flex;
       flex-direction: column;
-      gap: 16px;
-      transition: border-color 0.2s;
-      overflow: hidden;
+      align-items: center;
+      gap: 4px;
+      user-select: none;
+    }
+    .ntp-logo-text {
+      font-size: 42px;
+      font-weight: 300;
+      letter-spacing: -0.5px;
+      line-height: 1;
+      color: var(--text2);
+    }
+    .ntp-logo-text strong {
+      font-weight: 500;
+      color: var(--text);
+    }
+
+    /* ── Search bar (Chrome-style) ── */
+    .ntp-search-wrap {
       width: 100%;
-      max-width: 600px;
-      margin: 0 auto;
+      max-width: 584px;
     }
-    .card-label {
-      font-size: 10px;
-      font-weight: 700;
-      letter-spacing: 1px;
-      text-transform: uppercase;
-      color: #5f6368;
-    }
-
-    /* ── Search card ────────────────────────────────────────────── */
-    .engine-badge {
+    .ntp-search {
       display: flex;
       align-items: center;
-      gap: 10px;
-    }
-    .engine-icon {
-      width: 34px; height: 34px;
-      border-radius: 9px;
-      display: flex; align-items: center; justify-content: center;
-      font-size: 18px;
-      background: rgba(255,255,255,0.06);
-      flex-shrink: 0;
-    }
-    .engine-name { font-size: 17px; font-weight: 500; }
-    .engine-desc { font-size: 11px; color: #9aa0a6; }
-
-    .search-box {
-      display: flex;
-      align-items: center;
-      background: #3c4043;
-      border: 1px solid rgba(255,255,255,0.1);
-      border-radius: 26px;
-      overflow: hidden;
-      transition: border-color 0.2s, box-shadow 0.2s;
-    }
-    .search-box:focus-within {
-      border-color: #8ab4f8;
-      box-shadow: 0 0 0 3px rgba(138,180,248,0.14);
-    }
-    .search-icon-wrap {
+      background: var(--search-bg);
+      border: 1px solid var(--search-border);
+      border-radius: 24px;
       padding: 0 14px;
-      color: #9aa0a6;
-      display: flex; align-items: center;
-      flex-shrink: 0;
-    }
-    .search-box input {
-      flex: 1;
-      padding: 12px 0;
-      background: transparent;
-      border: none;
-      color: #e8eaed;
-      font-size: 14px;
-      outline: none;
-      min-width: 0;
-    }
-    .search-box input::placeholder { color: #6e7681; }
-    .search-go {
-      padding: 0 16px;
-      background: transparent;
-      border: none;
-      color: #8ab4f8;
-      cursor: pointer;
-      font-size: 12px;
-      font-weight: 600;
-      white-space: nowrap;
-      flex-shrink: 0;
-    }
-    .search-go:hover { color: #aecbfa; }
-
-    /* ── Bookmarks section ──────────────────────────────────────── */
-    .bookmarks-section {
-      padding: 0 36px 22px;
-      flex-shrink: 0;
-    }
-    .bookmarks-header {
-      display: flex;
-      align-items: center;
+      height: 48px;
       gap: 10px;
-      margin-bottom: 10px;
+      transition: box-shadow 0.2s, border-color 0.2s;
+      box-shadow: var(--shadow);
     }
-    .bookmarks-label {
-      font-size: 10px;
-      font-weight: 700;
-      letter-spacing: 1px;
-      text-transform: uppercase;
-      color: #5f6368;
+    .ntp-search:hover {
+      box-shadow: 0 1px 6px rgba(32,33,36,0.28);
+    }
+    body.dark .ntp-search:hover {
+      box-shadow: 0 1px 6px rgba(0,0,0,0.5);
+    }
+    .ntp-search:focus-within {
+      box-shadow: 0 1px 6px rgba(32,33,36,0.28);
+      border-color: transparent;
+    }
+    body.dark .ntp-search:focus-within {
+      box-shadow: 0 1px 8px rgba(138,180,248,0.2);
+    }
+    .ntp-search input {
       flex: 1;
-    }
-    .bm-add-btn {
-      padding: 4px 10px;
-      background: rgba(138,180,248,0.1);
-      border: 1px solid rgba(138,180,248,0.2);
-      border-radius: 12px;
-      color: #8ab4f8;
-      font-size: 11px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: background 0.15s;
-    }
-    .bm-add-btn:hover { background: rgba(138,180,248,0.2); }
-
-    .bm-add-form {
-      display: none;
-      gap: 7px;
-      margin-bottom: 10px;
-      align-items: center;
-      flex-wrap: wrap;
-    }
-    .bm-add-form input {
-      flex: 1;
-      min-width: 140px;
-      padding: 7px 11px;
-      background: #3c4043;
-      border: 1px solid rgba(255,255,255,0.12);
-      border-radius: 8px;
-      color: #e8eaed;
-      font-size: 13px;
+      background: transparent;
+      border: none;
+      color: var(--text);
+      font-size: 16px;
       outline: none;
     }
-    .bm-add-form input:focus { border-color: #8ab4f8; }
-    .bm-form-btn {
-      padding: 7px 14px;
-      border-radius: 8px;
-      font-size: 12px;
-      font-weight: 600;
-      cursor: pointer;
-      border: none;
-    }
-    .bm-form-save   { background: #1a73e8; color: #fff; }
-    .bm-form-save:hover { background: #1557b0; }
-    .bm-form-cancel { background: rgba(255,255,255,0.08); color: #9aa0a6; }
-    .bm-form-cancel:hover { background: rgba(255,255,255,0.14); }
-
-    .bookmarks-row {
-      display: flex;
-      gap: 8px;
-      flex-wrap: wrap;
-      min-height: 30px;
-    }
-    .bm-chip {
+    .ntp-search input::placeholder { color: var(--text3); }
+    .ntp-search-icons {
       display: flex;
       align-items: center;
       gap: 6px;
-      padding: 6px 10px 6px 10px;
-      background: #2d2e30;
-      border: 1px solid rgba(255,255,255,0.07);
-      border-radius: 18px;
-      color: #9aa0a6;
-      font-size: 12px;
-      cursor: default;
-      transition: all 0.12s;
+      flex-shrink: 0;
     }
-    .bm-chip:hover { border-color: rgba(138,180,248,0.2); background: rgba(138,180,248,0.05); }
-    .bm-chip img { width: 14px; height: 14px; border-radius: 2px; }
-    .bm-text { cursor: pointer; color: #bdc1c6; }
-    .bm-text:hover { color: #8ab4f8; }
-    .bm-del {
-      width: 16px; height: 16px;
+    .ntp-search-icon-btn {
+      width: 30px; height: 30px;
       border-radius: 50%;
-      background: transparent;
+      background: none;
       border: none;
-      color: #5f6368;
-      font-size: 13px;
-      line-height: 1;
       cursor: pointer;
-      display: flex; align-items: center; justify-content: center;
-      transition: color 0.12s, background 0.12s;
-      padding: 0; margin-left: 2px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text2);
+      transition: background 0.15s;
     }
-    .bm-del:hover { color: #e8eaed; background: rgba(255,255,255,0.12); }
+    .ntp-search-icon-btn:hover { background: var(--hover); }
 
-    .bm-empty {
+    /* ── Shortcuts grid ── */
+    .ntp-shortcuts {
+      width: 100%;
+      max-width: 560px;
+    }
+    .shortcuts-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(88px, 1fr));
+      gap: 4px;
+    }
+    .shortcut-tile {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      padding: 14px 8px 12px;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: background 0.15s;
+      text-decoration: none;
+      color: var(--text);
+      position: relative;
+    }
+    .shortcut-tile:hover { background: var(--hover); }
+    .shortcut-icon {
+      width: 48px; height: 48px;
+      border-radius: 50%;
+      background: var(--bg2);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--text2);
+    }
+    .shortcut-icon img { width: 24px; height: 24px; }
+    .shortcut-label {
       font-size: 12px;
-      color: #5f6368;
-      font-style: italic;
-      padding: 4px 0;
+      color: var(--text2);
+      text-align: center;
+      max-width: 80px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .shortcut-del {
+      position: absolute;
+      top: 6px; right: 6px;
+      width: 20px; height: 20px;
+      border-radius: 50%;
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      color: var(--text2);
+      font-size: 13px;
+      cursor: pointer;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      transition: background 0.12s;
+    }
+    .shortcut-tile:hover .shortcut-del { display: flex; }
+    .shortcut-del:hover { background: #ea4335; color: #fff; border-color: transparent; }
+    .add-shortcut {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      padding: 14px 8px 12px;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: background 0.15s;
+      color: var(--text2);
+    }
+    .add-shortcut:hover { background: var(--hover); }
+    .add-shortcut-icon {
+      width: 48px; height: 48px;
+      border-radius: 50%;
+      background: var(--bg2);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      color: var(--text3);
+    }
+    .add-shortcut-label { font-size: 12px; }
+
+    /* ── Add shortcut modal ── */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.4);
+      z-index: 200;
+      display: none;
+      align-items: center;
+      justify-content: center;
+    }
+    .modal-overlay.open { display: flex; }
+    .modal {
+      background: var(--modal-bg);
+      border-radius: 14px;
+      padding: 28px 32px 24px;
+      width: 320px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+      color: var(--text);
+    }
+    .modal h3 { font-size: 16px; font-weight: 500; margin-bottom: 18px; color: var(--text); }
+    .modal label { font-size: 12px; color: var(--text2); display: block; margin-bottom: 5px; }
+    .modal input {
+      width: 100%;
+      padding: 9px 12px;
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-size: 13px;
+      outline: none;
+      margin-bottom: 14px;
+    }
+    .modal input:focus { border-color: var(--blue); }
+    .modal-btns { display: flex; gap: 10px; justify-content: flex-end; }
+    .modal-btns button {
+      padding: 8px 18px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      border: none;
+    }
+    .modal-save { background: var(--blue); color: #fff; }
+    .modal-save:hover { filter: brightness(1.1); }
+    .modal-cancel { background: var(--hover); color: var(--text2); border: 1px solid var(--border); }
+    .modal-cancel:hover { background: var(--bg3); }
+
+    /* ── Customize button + panel ── */
+    .customize-btn {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      height: 36px;
+      padding: 0 16px;
+      border-radius: 18px;
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--text);
+      font-size: 13px;
+      transition: background 0.15s, box-shadow 0.15s;
+      z-index: 100;
+      box-shadow: var(--shadow);
+    }
+    .customize-btn:hover { background: var(--bg3); color: var(--text); }
+    .customize-panel {
+      position: fixed;
+      bottom: 64px;
+      right: 20px;
+      background: var(--modal-bg);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 20px 22px;
+      width: 260px;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.2);
+      z-index: 100;
+      display: none;
+    }
+    .customize-panel.open { display: block; }
+    .cp-title { font-size: 14px; font-weight: 600; color: var(--text); margin-bottom: 16px; }
+    .cp-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 14px;
+    }
+    .cp-label { font-size: 13px; color: var(--text2); }
+    .cp-toggle {
+      width: 34px; height: 20px;
+      background: var(--text3); border-radius: 10px; border: none;
+      cursor: pointer; transition: background 0.2s; position: relative; flex-shrink: 0;
+    }
+    .cp-toggle.on { background: var(--blue); }
+    .cp-toggle::after {
+      content: ''; position: absolute; top: 2px; left: 2px;
+      width: 16px; height: 16px; background: #fff; border-radius: 50%;
+      transition: left 0.2s;
+    }
+    .cp-toggle.on::after { left: 16px; }
+    .cp-section-label {
+      font-size: 10px; font-weight: 700; letter-spacing: 1px;
+      text-transform: uppercase; color: var(--text3);
+      margin-bottom: 10px; margin-top: 6px;
+    }
+    .bg-presets { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+    .bg-swatch {
+      width: 28px; height: 28px; border-radius: 6px; cursor: pointer;
+      border: 2px solid transparent; transition: border-color 0.15s, transform 0.15s;
+    }
+    .bg-swatch:hover { transform: scale(1.1); }
+    .bg-swatch.active { border-color: var(--blue); }
+    .bg-custom-row { display: flex; align-items: center; gap: 8px; }
+    .bg-custom-row label { font-size: 11px; color: var(--text2); }
+    input[type=color] {
+      width: 28px; height: 28px;
+      border: none; padding: 0;
+      border-radius: 6px; cursor: pointer; background: none;
     }
   </style>
 </head>
 <body>
 
-  <div class="greeting-bar" id="greeting">Good morning — <span>New Tab</span></div>
-
-  <div class="main-grid">
-
-    <!-- Search engine (full width, centered) -->
-    <div class="card">
-      <div class="card-label">Search</div>
-      <div class="engine-badge">
-        <div class="engine-icon" id="engine-icon">🔍</div>
-        <div>
-          <div class="engine-name" id="engine-name">Google</div>
-          <div class="engine-desc" id="engine-desc">google.com</div>
-        </div>
-      </div>
-      <div class="search-box">
-        <div class="search-icon-wrap">
-          <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
-            <circle cx="6.5" cy="6.5" r="4" stroke="#9aa0a6" stroke-width="1.4"/>
-            <path d="M9.5 9.5L13 13" stroke="#9aa0a6" stroke-width="1.4" stroke-linecap="round"/>
-          </svg>
-        </div>
-        <input type="text" id="search-input" placeholder="Search or type a URL" autofocus/>
-        <button class="search-go" id="search-btn">Search →</button>
-      </div>
-    </div>
-
+  <!-- Top-right links -->
+  <div class="ntp-topbar">
+    <a class="ntp-toplink" id="email-link" href="https://mail.google.com" target="_self">Gmail</a>
   </div>
 
-  <!-- BOTTOM: User bookmarks -->
-  <div class="bookmarks-section">
-    <div class="bookmarks-header">
-      <div class="bookmarks-label">Bookmarks</div>
-      <button class="bm-add-btn" id="bm-add-btn">+ Add</button>
+  <div class="ntp-center">
+    <!-- Wordmark -->
+    <div class="ntp-logo">
+      <div class="ntp-logo-text">Your <strong>Copilot</strong> Browser</div>
     </div>
-    <div class="bm-add-form" id="bm-add-form">
-      <input type="text" id="bm-label" placeholder="Name  e.g. GitHub"/>
-      <input type="text" id="bm-url"   placeholder="URL   e.g. https://github.com"/>
-      <button class="bm-form-btn bm-form-save"   id="bm-save">Add</button>
-      <button class="bm-form-btn bm-form-cancel" id="bm-cancel">Cancel</button>
+
+    <div class="ntp-search-wrap">
+      <div class="ntp-search">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" style="flex-shrink:0">
+          <circle cx="11" cy="11" r="7" stroke="var(--text3)" stroke-width="2"/>
+          <path d="M16.5 16.5L21 21" stroke="var(--text3)" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        <input type="text" id="search-input" placeholder="Search or type a URL" autofocus/>
+      </div>
     </div>
-    <div class="bookmarks-row" id="bookmarks-row"></div>
-    <div class="bm-empty" id="bm-empty">No bookmarks yet — click <strong>+ Add</strong> to save your favourite sites.</div>
+
+    <div class="ntp-shortcuts" id="shortcuts-section">
+      <div class="shortcuts-grid" id="shortcuts-grid"></div>
+    </div>
+  </div>
+
+  <!-- Customize button (Chrome-style pill) -->
+  <button class="customize-btn" id="customize-btn" title="Customize this page">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
+    </svg>
+    Customise
+  </button>
+
+  <!-- Customize panel -->
+  <div class="customize-panel" id="customize-panel">
+    <div class="cp-title">Customise this page</div>
+    <div class="cp-row">
+      <span class="cp-label">Show shortcuts</span>
+      <button class="cp-toggle on" id="cp-toggle-shortcuts"></button>
+    </div>
+    <div class="cp-section-label">Background</div>
+    <div class="bg-presets" id="bg-presets"></div>
+    <div class="bg-custom-row">
+      <label for="bg-color-pick">Custom:</label>
+      <input type="color" id="bg-color-pick" value="#ffffff"/>
+    </div>
+  </div>
+
+  <!-- Add shortcut modal -->
+  <div class="modal-overlay" id="shortcut-modal">
+    <div class="modal">
+      <h3>Add shortcut</h3>
+      <label>Name</label>
+      <input type="text" id="sc-name" placeholder="e.g. GitHub"/>
+      <label>URL</label>
+      <input type="text" id="sc-url" placeholder="e.g. https://github.com"/>
+      <div class="modal-btns">
+        <button class="modal-cancel" id="sc-cancel">Cancel</button>
+        <button class="modal-save" id="sc-save">Add</button>
+      </div>
+    </div>
   </div>
 
   <script>
-    const ENGINE_META = {
-      google:     { name: 'Google',     desc: 'google.com',     icon: 'G', url: 'https://www.google.com/search?q=' },
-      bing:       { name: 'Bing',       desc: 'bing.com',       icon: 'B', url: 'https://www.bing.com/search?q=' },
-      duckduckgo: { name: 'DuckDuckGo', desc: 'duckduckgo.com', icon: 'D', url: 'https://duckduckgo.com/?q=' },
-      yahoo:      { name: 'Yahoo',      desc: 'yahoo.com',      icon: 'Y', url: 'https://search.yahoo.com/search?p=' },
-      ecosia:     { name: 'Ecosia',     desc: 'ecosia.org',     icon: 'E', url: 'https://www.ecosia.org/search?q=' },
+    // ── Theme ────────────────────────────────────────────────────────────────
+    const savedTheme = localStorage.getItem('browser_theme') || 'light';
+    if (savedTheme === 'dark') document.body.classList.add('dark');
+
+    // ── Email provider from settings ─────────────────────────────────────────
+    const EMAIL_PROVIDERS = {
+      gmail:     { label: 'Gmail',       url: 'https://mail.google.com' },
+      outlook:   { label: 'Outlook',     url: 'https://outlook.live.com' },
+      yahoo:     { label: 'Yahoo Mail',  url: 'https://mail.yahoo.com' },
+      proton:    { label: 'Proton Mail', url: 'https://mail.proton.me' },
+      icloud:    { label: 'iCloud Mail', url: 'https://www.icloud.com/mail' },
     };
+    const emailProvider = localStorage.getItem('email_provider') || 'gmail';
+    const ep = EMAIL_PROVIDERS[emailProvider] || EMAIL_PROVIDERS.gmail;
+    const emailLink = document.getElementById('email-link');
+    emailLink.textContent = ep.label;
+    emailLink.href = ep.url;
 
-    // ── Engine from localStorage (with hash fallback) ────────────────────────
-    const storedEngine = localStorage.getItem('search_engine');
-    const engineKey  = storedEngine || window.location.hash.slice(1) || 'google';
-    const engineMeta = ENGINE_META[engineKey] || ENGINE_META.google;
-    window.__engineUrl = engineMeta.url;
+    // ── Engine from localStorage ─────────────────────────────────────────────
+    const ENGINE_META = {
+      google:     { url: 'https://www.google.com/search?q=' },
+      bing:       { url: 'https://www.bing.com/search?q=' },
+      duckduckgo: { url: 'https://duckduckgo.com/?q=' },
+      yahoo:      { url: 'https://search.yahoo.com/search?p=' },
+      ecosia:     { url: 'https://www.ecosia.org/search?q=' },
+      brave:      { url: 'https://search.brave.com/search?q=' },
+    };
+    const engineKey = localStorage.getItem('search_engine') || 'google';
+    const engineUrl = (ENGINE_META[engineKey] || ENGINE_META.google).url;
 
-    document.getElementById('engine-icon').textContent = engineMeta.icon;
-    document.getElementById('engine-name').textContent = engineMeta.name;
-    document.getElementById('engine-desc').textContent = engineMeta.desc;
-    document.getElementById('search-input').placeholder = `Search with ${engineMeta.name}`;
-
-    // ── Greeting ──────────────────────────────────────────────────────────────
-    const h = new Date().getHours();
-    document.getElementById('greeting').innerHTML =
-      `${h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening'} — <span>New Tab</span>`;
-
-    // ── Search ────────────────────────────────────────────────────────────────
+    // ── Search ───────────────────────────────────────────────────────────────
     function doSearch() {
       const v = document.getElementById('search-input').value.trim();
       if (!v) return;
-      const url = /^https?:\/\//i.test(v) ? v
-                : !v.includes(' ') && v.includes('.') ? 'https://' + v
-                : window.__engineUrl + encodeURIComponent(v);
-      window.location.href = url;
+      window.location.href = /^https?:\/\//i.test(v) ? v
+        : (!v.includes(' ') && v.includes('.')) ? 'https://' + v
+        : engineUrl + encodeURIComponent(v);
     }
-    document.getElementById('search-btn').addEventListener('click', doSearch);
     document.getElementById('search-input').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
 
-    // ── Bookmarks ─────────────────────────────────────────────────────────────
-    let currentBookmarks = [];
+    // ── Shortcuts ────────────────────────────────────────────────────────────
+    const DEFAULT_SHORTCUTS = [
+      { name: 'YouTube',   url: 'https://www.youtube.com' },
+      { name: 'GitHub',    url: 'https://github.com' },
+      { name: 'Reddit',    url: 'https://www.reddit.com' },
+      { name: 'ChatGPT',   url: 'https://chat.openai.com' },
+    ];
 
-    window.setBookmarks = function(bms) {
-      currentBookmarks = Array.isArray(bms) ? bms : [];
-      renderBookmarks();
-    };
+    function loadShortcuts() {
+      try { return JSON.parse(localStorage.getItem('ntp_shortcuts') || 'null') || DEFAULT_SHORTCUTS; }
+      catch { return DEFAULT_SHORTCUTS; }
+    }
+    function saveShortcuts(sc) { localStorage.setItem('ntp_shortcuts', JSON.stringify(sc)); }
 
-    function renderBookmarks() {
-      const row   = document.getElementById('bookmarks-row');
-      const empty = document.getElementById('bm-empty');
-      row.innerHTML = '';
-      if (currentBookmarks.length === 0) { empty.style.display = 'block'; return; }
-      empty.style.display = 'none';
-
-      currentBookmarks.forEach((bm, i) => {
-        const url   = bm.url   || bm;
-        const label = bm.label || url;
-        const chip  = document.createElement('div');
-        chip.className = 'bm-chip';
-
-        let faviconHtml = '';
-        try {
-          faviconHtml = `<img src="https://www.google.com/s2/favicons?domain=${new URL(url).hostname}&sz=16" onerror="this.style.display='none'">`;
-        } catch {}
-
-        chip.innerHTML = `${faviconHtml}<span class="bm-text">${label}</span><button class="bm-del" title="Remove">×</button>`;
-        chip.querySelector('.bm-text').addEventListener('click', () => { window.location.href = url; });
-        chip.querySelector('.bm-del').addEventListener('click', e => {
+    function renderShortcuts() {
+      const grid = document.getElementById('shortcuts-grid');
+      grid.innerHTML = '';
+      const shortcuts = loadShortcuts();
+      shortcuts.forEach((sc, i) => {
+        const tile = document.createElement('div');
+        tile.className = 'shortcut-tile';
+        const host = (() => { try { return new URL(sc.url).hostname; } catch { return ''; } })();
+        const initial = sc.name.charAt(0).toUpperCase();
+        tile.innerHTML = `
+          <div class="shortcut-icon" id="sc-icon-${i}">
+            <img src="https://www.google.com/s2/favicons?domain=${host}&sz=48"
+                 onerror="this.parentElement.textContent='${initial}'"
+                 onload="this.parentElement.style.background='transparent'">
+          </div>
+          <span class="shortcut-label">${sc.name}</span>
+          <button class="shortcut-del" title="Remove" data-i="${i}">&times;</button>`;
+        tile.querySelector('.shortcut-icon').addEventListener('click', () => { window.location.href = sc.url; });
+        tile.querySelector('.shortcut-label').addEventListener('click', () => { window.location.href = sc.url; });
+        tile.querySelector('.shortcut-del').addEventListener('click', e => {
           e.stopPropagation();
-          console.log('__bookmarks__:REMOVE:' + i);
+          const sc2 = loadShortcuts(); sc2.splice(i, 1);
+          saveShortcuts(sc2); renderShortcuts();
         });
-        row.appendChild(chip);
+        grid.appendChild(tile);
+      });
+      const addTile = document.createElement('div');
+      addTile.className = 'add-shortcut';
+      addTile.innerHTML = '<div class="add-shortcut-icon">+</div><span class="add-shortcut-label">Add shortcut</span>';
+      addTile.addEventListener('click', () => {
+        document.getElementById('shortcut-modal').classList.add('open');
+        document.getElementById('sc-name').focus();
+      });
+      grid.appendChild(addTile);
+    }
+    renderShortcuts();
+
+    // Shortcut modal
+    document.getElementById('sc-cancel').addEventListener('click', () => {
+      document.getElementById('shortcut-modal').classList.remove('open');
+      document.getElementById('sc-name').value = '';
+      document.getElementById('sc-url').value = '';
+    });
+    document.getElementById('sc-save').addEventListener('click', () => {
+      let url = document.getElementById('sc-url').value.trim();
+      const name = document.getElementById('sc-name').value.trim();
+      if (!url) return document.getElementById('sc-url').focus();
+      if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+      const label = name || (() => { try { return new URL(url).hostname; } catch { return url; } })();
+      const sc = loadShortcuts(); sc.push({ name: label, url });
+      saveShortcuts(sc); renderShortcuts();
+      document.getElementById('shortcut-modal').classList.remove('open');
+      document.getElementById('sc-name').value = '';
+      document.getElementById('sc-url').value = '';
+    });
+    document.getElementById('sc-name').addEventListener('keydown', e => {
+      if (e.key === 'Enter') document.getElementById('sc-url').focus();
+      if (e.key === 'Escape') document.getElementById('sc-cancel').click();
+    });
+    document.getElementById('sc-url').addEventListener('keydown', e => {
+      if (e.key === 'Enter') document.getElementById('sc-save').click();
+      if (e.key === 'Escape') document.getElementById('sc-cancel').click();
+    });
+    document.getElementById('shortcut-modal').addEventListener('click', e => {
+      if (e.target === document.getElementById('shortcut-modal')) document.getElementById('sc-cancel').click();
+    });
+
+    // ── Customization ────────────────────────────────────────────────────────
+    const BG_PRESETS = [
+      { color: '#f2f2f2', label: 'Chrome grey (default)' },
+      { color: '#f8f9fa', label: 'Soft white' },
+      { color: '#e8f0fe', label: 'Blue tint' },
+      { color: '#202124', label: 'Dark' },
+      { color: '#0d1117', label: 'Midnight' },
+      { color: '#1a1a2e', label: 'Indigo' },
+    ];
+
+    function loadPref(k, def) { return localStorage.getItem('ntp_' + k) ?? def; }
+    function savePref(k, v) { localStorage.setItem('ntp_' + k, v); }
+
+    function applyBg(color) {
+      // Detect if dark for body class (rough luminance check)
+      const hex = color.replace('#','');
+      if (hex.length === 6) {
+        const r = parseInt(hex.slice(0,2),16), g = parseInt(hex.slice(2,4),16), b = parseInt(hex.slice(4,6),16);
+        const lum = (0.299*r + 0.587*g + 0.114*b) / 255;
+        if (lum < 0.4) {
+          document.body.classList.add('dark');
+        } else {
+          document.body.classList.remove('dark');
+        }
+      }
+      document.body.style.background = color;
+      document.getElementById('bg-color-pick').value = color;
+      document.querySelectorAll('.bg-swatch').forEach(s => {
+        s.classList.toggle('active', s.dataset.color === color);
       });
     }
 
-    // Add bookmark form
-    document.getElementById('bm-add-btn').addEventListener('click', () => {
-      const f = document.getElementById('bm-add-form');
-      f.style.display = f.style.display === 'flex' ? 'none' : 'flex';
-      if (f.style.display === 'flex') document.getElementById('bm-label').focus();
-    });
-    document.getElementById('bm-cancel').addEventListener('click', () => {
-      document.getElementById('bm-add-form').style.display = 'none';
-      document.getElementById('bm-label').value = '';
-      document.getElementById('bm-url').value = '';
-    });
-    document.getElementById('bm-save').addEventListener('click', () => {
-      let url   = document.getElementById('bm-url').value.trim();
-      const lbl = document.getElementById('bm-label').value.trim();
-      if (!url) { document.getElementById('bm-url').focus(); return; }
-      if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
-      const label = lbl || (() => { try { return new URL(url).hostname; } catch { return url; } })();
-      console.log('__bookmarks__:ADD:' + JSON.stringify({ url, label }));
-      document.getElementById('bm-url').value   = '';
-      document.getElementById('bm-label').value = '';
-      document.getElementById('bm-add-form').style.display = 'none';
-    });
-    // Enter on Name → jump to URL; Enter on URL → save
-    document.getElementById('bm-label').addEventListener('keydown', e => {
-      if (e.key === 'Enter') document.getElementById('bm-url').focus();
-      if (e.key === 'Escape') document.getElementById('bm-cancel').click();
-    });
-    document.getElementById('bm-url').addEventListener('keydown', e => {
-      if (e.key === 'Enter') document.getElementById('bm-save').click();
-      if (e.key === 'Escape') document.getElementById('bm-cancel').click();
+    const presetsEl = document.getElementById('bg-presets');
+    BG_PRESETS.forEach(p => {
+      const s = document.createElement('div');
+      s.className = 'bg-swatch';
+      s.dataset.color = p.color;
+      s.style.background = p.color;
+      s.style.border = '2px solid var(--border)';
+      s.title = p.label;
+      s.addEventListener('click', () => { applyBg(p.color); savePref('bg', p.color); });
+      presetsEl.appendChild(s);
     });
 
-    // Signal renderer that the page is ready for bookmark injection
+    const savedBg = loadPref('bg', savedTheme === 'dark' ? '#202124' : '#f2f2f2');
+    applyBg(savedBg);
+
+    document.getElementById('bg-color-pick').addEventListener('input', e => {
+      applyBg(e.target.value);
+      savePref('bg', e.target.value);
+    });
+
+    // Toggle shortcuts
+    const shortcutsToggle = document.getElementById('cp-toggle-shortcuts');
+    const showShortcuts = loadPref('show_shortcuts', 'true') === 'true';
+    if (!showShortcuts) {
+      document.getElementById('shortcuts-section').style.display = 'none';
+      shortcutsToggle.classList.remove('on');
+    }
+    shortcutsToggle.addEventListener('click', () => {
+      const on = !shortcutsToggle.classList.contains('on');
+      shortcutsToggle.classList.toggle('on', on);
+      document.getElementById('shortcuts-section').style.display = on ? '' : 'none';
+      savePref('show_shortcuts', on ? 'true' : 'false');
+    });
+
+    // Customize panel toggle
+    const customizeBtn = document.getElementById('customize-btn');
+    const customizePanel = document.getElementById('customize-panel');
+    customizeBtn.addEventListener('click', () => customizePanel.classList.toggle('open'));
+    document.addEventListener('click', e => {
+      if (!customizePanel.contains(e.target) && e.target !== customizeBtn)
+        customizePanel.classList.remove('open');
+    });
+
+    // ── Listen for theme changes from parent ─────────────────────────────────
+    window.setTheme = function(theme) {
+      localStorage.setItem('browser_theme', theme);
+      if (theme === 'dark') {
+        document.body.classList.add('dark');
+        const bg = loadPref('bg', '#202124');
+        document.body.style.background = bg;
+      } else {
+        document.body.classList.remove('dark');
+        const bg = loadPref('bg', '#f2f2f2');
+        document.body.style.background = bg;
+      }
+    };
+
+    // Signal ready for bookmark injection
     console.log('__newtab__:ready');
   </script>
 </body>
-</html>
